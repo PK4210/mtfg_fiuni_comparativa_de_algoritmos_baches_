@@ -31,7 +31,9 @@ REALES = ["longitud_m", "exposicion", "costo", "costo_networkx", "informatividad
 
 def comparar(ref: pd.DataFrame, nue: pd.DataFrame) -> dict:
     faltan = len(ref.merge(nue[CLAVE], on=CLAVE, how="left", indicator=True).query("_merge == 'left_only'"))
-    sobran = len(nue.merge(ref[CLAVE], on=CLAVE, how="left", indicator=True).query("_merge == 'left_only'"))
+    # filas de la reproducción sin referencia: si la referencia es parcial (por ejemplo,
+    # solo algunas réplicas del modelo 1), se informan pero no cuentan como diferencia
+    sin_referencia = len(nue.merge(ref[CLAVE], on=CLAVE, how="left", indicator=True).query("_merge == 'left_only'"))
     m = ref.merge(nue, on=CLAVE, suffixes=("_ref", "_nue"))
     columnas = {}
     for c in EXACTAS:
@@ -49,9 +51,11 @@ def comparar(ref: pd.DataFrame, nue: pd.DataFrame) -> dict:
     total_dist = sum(v["distintas"] for v in columnas.values())
     return {
         "filas_referencia": int(len(ref)), "filas_reproduccion": int(len(nue)),
-        "faltan_en_reproduccion": faltan, "sobran_en_reproduccion": sobran,
+        "filas_comparadas": int(len(m)),
+        "faltan_en_reproduccion": faltan, "filas_sin_referencia": sin_referencia,
+        "referencia_parcial": bool(sin_referencia > 0),
         "columnas": columnas,
-        "coincide_todo_lo_determinista": bool(total_dist == 0 and faltan == 0 and sobran == 0),
+        "coincide_todo_lo_determinista": bool(total_dist == 0 and faltan == 0 and len(m) > 0),
         "tiempos_descriptivos": tiempos.round(4).reset_index().to_dict(orient="records"),
     }
 
@@ -68,7 +72,11 @@ def main() -> None:
     ruta = RES_TABLAS / f"reproduccion_{args.area}.json"
     ruta.write_text(json.dumps(informe, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
-    print(f"== reproducción {args.area}: {informe['filas_reproduccion']} filas frente a {informe['filas_referencia']}")
+    print(f"== reproducción {args.area}: {informe['filas_reproduccion']} filas; referencia: {informe['filas_referencia']}; "
+          f"comparadas: {informe['filas_comparadas']}")
+    if informe["referencia_parcial"]:
+        print(f"   referencia parcial: {informe['filas_sin_referencia']} filas de la reproducción todavía no tienen "
+              "referencia y no se comparan (no cuentan como diferencia)")
     for c, v in informe["columnas"].items():
         print(f"   {c:<16} distintas: {v['distintas']}")
     print("   RESULTADO:", "todo lo determinista coincide" if informe["coincide_todo_lo_determinista"]
