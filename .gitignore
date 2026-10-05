@@ -1,0 +1,9 @@
+datos/derivados/*
+!datos/derivados/.gitkeep
+resultados/**/*.png
+resultados/**/*.pdf
+resultados/**/*.csv
+resultados/**/*.json
+__pycache__/
+*.pyc
+resultados/**/*.mp4

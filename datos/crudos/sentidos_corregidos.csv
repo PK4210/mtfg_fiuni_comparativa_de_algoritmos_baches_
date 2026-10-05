@@ -1,0 +1,11 @@
+# Correcciones al sentido de circulación que publica OpenStreetMap.
+#
+# Una fila por calle. El nombre debe coincidir con el que figura en el mapa de
+# auditoría (resultados/mapas/sentidos_<ciudad>.png).
+#
+#   sentido = unico   la calle es de una sola mano
+#   sentido = doble   la calle admite ambas manos
+#
+# Mientras no haya filas de datos, el grafo queda tal como lo entrega OSM.
+# Ejemplo:  Curupayty,doble
+nombre_calle,sentido

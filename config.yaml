@@ -1,0 +1,88 @@
+# Configuración del experimento — MTFG
+# Comparación de Dijkstra, A* y Bellman-Ford sobre grafos viales ponderados
+# por el estado del pavimento.
+#
+# Todos los parámetros del experimento viven acá. El código no contiene
+# ninguna constante: cambiar un valor de este archivo cambia el experimento.
+
+semilla_maestra: 20260903      # de ella se derivan todas las demás semillas
+
+# --- Áreas de estudio -------------------------------------------------------
+areas:
+  encarnacion:
+    nombre: "Encarnación, Paraguay"
+    rol: "caso de estudio principal"
+    # Recuadro del relevamiento: Av. Irrazábal, Av. Caballero, Av. Francia y
+    # Av. Costanera Rep. del Paraguay con calle Iturbe (2,89 km²).
+    bbox: [-55.8733, -27.3440, -55.8581, -27.3258]   # oeste, sur, este, norte
+    epsg_metrico: 32721         # UTM zona 21 sur
+    fuente_baches: "datos/crudos/Capa Baches.kml"
+    formato: kml
+
+  jersey_city:
+    nombre: "Jersey City, Nueva Jersey, EE. UU."
+    rol: "contraste de escala"
+    bbox: [-74.1250, 40.6620, -74.0200, 40.7700]
+    epsg_metrico: 32618         # UTM zona 18 norte
+    fuente_baches: "datos/crudos/jersey_city_potholes.csv"
+    formato: csv
+
+# --- Clases de deterioro ----------------------------------------------------
+# El relevamiento de Encarnación codifica la clase en el color del icono.
+# Verde = bache individual; azul = agrupación de varios baches próximos.
+# Cambiar la correspondencia acá y en ninguna otra parte.
+clases:
+  correspondencia_color:
+    "0F9D58": individual        # verde
+    "0288D1": agrupacion        # azul
+  baches_representados:
+    individual: 1
+    intermedia: 6.5             # solo se usa en la configuración C3
+    agrupacion: 12              # estimado: (750 - 322) / 37 ≈ 11,6
+  orden: [individual, intermedia, agrupacion]   # intensidad creciente
+
+# Configuraciones de transferencia de distribución hacia la red de contraste.
+configuraciones:
+  C2: [individual, agrupacion]
+  C3: [individual, intermedia, agrupacion]
+
+# --- Construcción del grafo -------------------------------------------------
+grafo:
+  tipo_red: drive               # red de circulación vehicular
+  simplificar: true
+  velocidad_por_defecto: 30     # km/h, si no hay señalización ni jerarquía
+
+# --- Asignación espacial ----------------------------------------------------
+asignacion:
+  radio_tolerancia_m: 20        # ecuación (15)
+
+# --- Función de costo -------------------------------------------------------
+costo:
+  alfas: [0.0, 0.5, 1.0, 2.0, 5.0]   # ecuación (9)
+
+# --- Protocolo experimental -------------------------------------------------
+experimento:
+  pares_od: 200                 # pares origen-destino por condición
+  repeticiones: 5               # cronometrajes por par
+  descartar_calentamiento: 1    # se descarta la primera repetición
+  distancia_minima_m: 300       # evita instancias triviales
+  replicas_asignacion: 30       # solo en la red de contraste
+  # Bellman-Ford es O(n·m): en redes grandes conviene acotar la muestra.
+  limite_pares_bellman_ford: 30
+
+# --- Visualización ----------------------------------------------------------
+visualizacion:
+  fps: 30
+  cuadros_objetivo: 600         # se decima la traza para no pasarse
+  segundos_ruta_final: 2        # cuánto se sostiene la ruta al terminar
+  dpi_mapas: 300
+  # el par origen-destino de los videos se elige del cuartil superior de
+  # distancia, para que el recorrido sea largo y la expansión se vea bien
+  cuantil_distancia_par: 0.75
+
+# --- Correcciones de sentido de circulación ---------------------------------
+# Si `datos/crudos/sentidos_corregidos.csv` existe y tiene filas, sus valores
+# sobrescriben lo que dice OpenStreetMap. Sirve para arreglar sentidos mal
+# cartografiados sin tocar el código ni editar OSM.
+sentidos:
+  archivo_correcciones: "datos/crudos/sentidos_corregidos.csv"
