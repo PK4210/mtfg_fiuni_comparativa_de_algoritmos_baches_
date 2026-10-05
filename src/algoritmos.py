@@ -1,10 +1,23 @@
 """Implementación instrumentada de Dijkstra, A* y Bellman-Ford.
 
 Los tres se implementan directamente y no se toman de la biblioteca de análisis
-de redes, por dos razones: el objetivo específico 3 pide implementarlos, y
-registrar el número de nodos expandidos exige instrumentar el bucle principal,
-algo que las versiones de biblioteca no exponen. NetworkX se conserva como
-oráculo de corrección en `verificacion.py`.
+de redes: registrar el esfuerzo de búsqueda exige instrumentar el bucle
+principal, algo que las versiones de biblioteca no exponen. NetworkX se usa
+como implementación de referencia para verificar la corrección.
+
+Contadores (PTFG rev6, protocolo, párrafo 5):
+  expandidos    nodos extraídos de la cola y cerrados (Dijkstra y A*)
+  relajaciones  aristas evaluadas: cada vez que se compara d(u) + w(u, v)
+                contra d(v), haya o no mejora
+  mejoras       relajaciones que efectivamente redujeron d(v)
+  pasadas       recorridos completos de la lista de aristas (Bellman-Ford)
+
+Los tres algoritmos se mantienen en su formulación clásica (limitación 6 del
+PTFG). Dijkstra y A* se detienen al cerrar el destino, como en las
+formulaciones de Dijkstra (1959) y de Hart, Nilsson y Raphael (1968) para el
+camino entre dos nodos. Bellman-Ford itera aproximaciones sucesivas hasta que
+ninguna distancia cambia, como en la formulación de Bellman (1958); la cota de
+n − 1 pasadas es el peor caso. Después verifica la ausencia de ciclos negativos.
 """
 from __future__ import annotations
 
@@ -22,8 +35,9 @@ class Resultado:
     ruta: list | None
     costo: float | None
     expandidos: int = 0
-    pasadas: int = 0
     relajaciones: int = 0
+    mejoras: int = 0
+    pasadas: int = 0
     h_origen: float = 0.0
     extra: dict = field(default_factory=dict)
 
@@ -54,7 +68,7 @@ def dijkstra(G, origen, destino) -> Resultado:
     pred: dict = {}
     cerrados: set = set()
     cola = [(0.0, origen)]
-    expandidos = 0
+    expandidos = relajaciones = mejoras = 0
 
     while cola:
         d_u, u = heapq.heappop(cola)
@@ -65,40 +79,38 @@ def dijkstra(G, origen, destino) -> Resultado:
         if u == destino:
             break
         for v, peso in _aristas_salientes(G, u):
+            relajaciones += 1
             alt = d_u + peso
             if alt < dist.get(v, math.inf):
                 dist[v] = alt
                 pred[v] = u
+                mejoras += 1
                 heapq.heappush(cola, (alt, v))
 
-    return Resultado(_reconstruir(pred, origen, destino),
-                     dist.get(destino), expandidos=expandidos)
+    return Resultado(_reconstruir(pred, origen, destino), dist.get(destino),
+                     expandidos=expandidos, relajaciones=relajaciones, mejoras=mejoras)
 
 
 # --- A* ---------------------------------------------------------------------
-def _haversine(lat1, lon1, lat2, lon2) -> float:
-    R = 6_371_008.8
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dp = p2 - p1
-    dl = math.radians(lon2 - lon1)
-    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(a))
+def heuristica(G, n, destino) -> float:
+    """Distancia en línea recta entre n y el destino, en coordenadas proyectadas.
 
-
-def heuristica(G, n, destino, c_min: float) -> float:
-    """Distancia geodésica escalada: admisible bajo la ec. (9). Ecuación (8)."""
+    Es admisible porque w(e) = ℓ(e) · [1 + α · s(e)] ≥ ℓ(e), y la longitud de
+    cualquier camino es al menos la distancia en línea recta entre sus extremos.
+    En las proyecciones UTM usadas, el factor de escala en las áreas de estudio
+    es menor que 1, de modo que la distancia proyectada no excede la real.
+    """
     a, b = G.nodes[n], G.nodes[destino]
-    return _haversine(a["lat"], a["lon"], b["lat"], b["lon"]) * c_min
+    return math.hypot(a["x"] - b["x"], a["y"] - b["y"])
 
 
 def a_estrella(G, origen, destino) -> Resultado:
-    c_min = G.graph["c_min"]
     g = {origen: 0.0}
     pred: dict = {}
     cerrados: set = set()
-    h_origen = heuristica(G, origen, destino, c_min)
+    h_origen = heuristica(G, origen, destino)
     cola = [(h_origen, origen)]
-    expandidos = 0
+    expandidos = relajaciones = mejoras = 0
 
     while cola:
         _, u = heapq.heappop(cola)
@@ -109,14 +121,17 @@ def a_estrella(G, origen, destino) -> Resultado:
         if u == destino:
             break
         for v, peso in _aristas_salientes(G, u):
+            relajaciones += 1
             alt = g[u] + peso
             if alt < g.get(v, math.inf):
                 g[v] = alt
                 pred[v] = u
-                heapq.heappush(cola, (alt + heuristica(G, v, destino, c_min), v))
+                mejoras += 1
+                heapq.heappush(cola, (alt + heuristica(G, v, destino), v))
 
     return Resultado(_reconstruir(pred, origen, destino), g.get(destino),
-                     expandidos=expandidos, h_origen=h_origen)
+                     expandidos=expandidos, relajaciones=relajaciones, mejoras=mejoras,
+                     h_origen=h_origen)
 
 
 # --- Bellman-Ford -----------------------------------------------------------
@@ -125,18 +140,19 @@ def bellman_ford(G, origen, destino) -> Resultado:
     dist[origen] = 0.0
     pred: dict = {}
     aristas = [(u, v, d["peso"]) for u, v, d in G.edges(data=True)]
-    pasadas = relajaciones = 0
+    pasadas = relajaciones = mejoras = 0
 
     for _ in range(len(G.nodes) - 1):
         cambio = False
         pasadas += 1
         for u, v, peso in aristas:
+            relajaciones += 1
             if dist[u] + peso < dist[v]:
                 dist[v] = dist[u] + peso
                 pred[v] = u
-                relajaciones += 1
+                mejoras += 1
                 cambio = True
-        if not cambio:                    # salida temprana: ya convergió
+        if not cambio:                    # convergencia: ninguna distancia cambió
             break
 
     for u, v, peso in aristas:            # detección de ciclo negativo
@@ -146,7 +162,7 @@ def bellman_ford(G, origen, destino) -> Resultado:
     costo = dist[destino]
     return Resultado(_reconstruir(pred, origen, destino),
                      None if costo == math.inf else costo,
-                     pasadas=pasadas, relajaciones=relajaciones)
+                     relajaciones=relajaciones, mejoras=mejoras, pasadas=pasadas)
 
 
 ALGORITMOS = {

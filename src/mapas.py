@@ -1,9 +1,11 @@
 """Mapas estáticos de cada ciudad.
 
-Produce tres, a `resultados/mapas/`:
+Produce, a `resultados/mapas/` (sufijo _<modelo> en Jersey City):
 
   red_<ciudad>        la red vial con sus nodos y los baches superpuestos
-  severidad_<ciudad>  las aristas coloreadas por su índice de deterioro
+  severidad_<ciudad>  las aristas coloreadas por su índice de severidad s(e)
+  rutas_<ciudad>      rutas de un mismo par para varios valores de α, con los
+                      tres algoritmos superpuestos
   sentidos_<ciudad>   auditoría del sentido de circulación que publica OSM
 
 El tercero es el que hay que contrastar con la realidad: si algún sentido está
@@ -11,6 +13,7 @@ mal cartografiado, se corrige en `datos/crudos/sentidos_corregidos.csv`.
 
 Uso:
     python src/mapas.py --area encarnacion
+    python src/mapas.py --area jersey_city --modelo M2
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ import grafo as gr
 
 plt.rcParams.update({
     "font.family": "serif",
-    "font.serif": ["Times New Roman", "DejaVu Serif"],
+    "font.serif": ["Liberation Serif", "Times New Roman", "DejaVu Serif"],
     "font.size": 9,
     "savefig.bbox": "tight",
     "savefig.pad_inches": 0.08,
@@ -61,7 +64,7 @@ def _dibujar_red(ax, aristas, color=GRIS, lw=0.6, alpha=1.0):
 
 
 def mapa_red(G, aristas, nodos, puntos, clases, ciudad: str, titulo: str,
-             sinteticas: bool = False) -> None:
+             nota: str = "") -> None:
     """Red vial, nodos e incidencias de deterioro."""
     # en redes densas los marcadores taparían la trama: se escalan
     n_reg = max(len(clases), 1)
@@ -93,13 +96,8 @@ def mapa_red(G, aristas, nodos, puntos, clases, ciudad: str, titulo: str,
         Line2D([], [], marker="o", ls="", color=WARM, ms=8,
                label=f"agrupación ({sum(grandes)})"),
     ], loc="upper left", bbox_to_anchor=(-.02, -.01), frameon=False, fontsize=8)
-    if sinteticas:
-        fig.text(.5, .012, "La fuente no publica clase por registro: la "
-                 "distribución individual/agrupación se transfirió desde el "
-                 "relevamiento de Encarnación.\n"
-                 "Es un atributo sintético y no describe el estado real de "
-                 "cada bache.",
-                 ha="center", fontsize=7.5, color="#8a4a20", style="italic")
+    if nota:
+        fig.text(.5, .012, nota, ha="center", fontsize=7.5, color="#8a4a20", style="italic")
     _guardar(fig, f"red_{ciudad}")
 
 
@@ -116,12 +114,12 @@ def mapa_severidad(G, aristas, ciudad: str, titulo: str) -> None:
         sm = plt.cm.ScalarMappable(cmap="OrRd",
                                    norm=plt.Normalize(vmin=0, vmax=1))
         barra = fig.colorbar(sm, ax=ax, fraction=.03, pad=.02)
-        barra.set_label("índice de deterioro  s(e)", fontsize=9)
+        barra.set_label("índice de severidad  s(e)", fontsize=9)
         barra.outline.set_visible(False)
 
     pct = round(100 * len(con) / len(aristas), 1)
     ax.set_title(f"Deterioro por tramo — {titulo}\n"
-                 f"{len(con)} de {len(aristas)} tramos con registros ({pct} %)",
+                 f"{len(con)} de {len(aristas)} tramos con baches ({pct} %)",
                  fontsize=11, pad=8)
     _guardar(fig, f"severidad_{ciudad}")
 
@@ -176,35 +174,91 @@ def mapa_sentidos(G, aristas, ciudad: str, titulo: str) -> None:
     _guardar(fig, f"sentidos_{ciudad}")
 
 
+def mapa_rutas(G, aristas, ciudad: str, titulo: str) -> dict:
+    """Rutas de un mismo par para varios α; los tres algoritmos se superponen.
+
+    El par se elige del cuartil superior de distancia en línea recta entre los
+    pares del protocolo, para que el recorrido sea largo. Como los tres
+    algoritmos obtienen el mismo costo óptimo, se comprueba además si devuelven
+    la misma secuencia de nodos y se informa.
+    """
+    import algoritmos as alg
+    import experimento as exp
+
+    pares = exp.generar_pares(G, CFG["experimento"]["pares_od"], CFG["semilla_maestra"])
+    dist = sorted(((exp.distancia_recta(G, o, d), o, d) for o, d in pares))
+    _, origen, destino = dist[int(CFG["visualizacion"]["cuantil_distancia_par"] * (len(dist) - 1))]
+
+    from metricas import de_ruta
+
+    sev = np.array([G.edges[i].get("severidad", 0.0) for i in aristas.index])
+    fig, ax = _lienzo()
+    aristas[sev == 0].plot(ax=ax, color=GRIS, linewidth=0.6, zorder=1)
+    if (sev > 0).any():
+        aristas[sev > 0].plot(ax=ax, column=sev[sev > 0], cmap="OrRd", vmin=0, vmax=1,
+                              linewidth=1.3, alpha=.55, zorder=1)
+    # de abajo hacia arriba, cada α más fino que el anterior: los tramos
+    # compartidos quedan a la vista como líneas concéntricas
+    trazos = [(0.0, ACC, 7.0), (1.0, VERDE, 4.2), (5.0, "#111111", 1.6)]
+    leyenda, iguales = [], {}
+    for alfa, color, ancho in trazos:
+        gr.ponderar(G, alfa)
+        rutas = {n: f(G, origen, destino).ruta for n, f in alg.ALGORITMOS.items()}
+        iguales[alfa] = len({tuple(r) for r in rutas.values()}) == 1
+        for nombre, ruta in rutas.items():
+            ax.plot([G.nodes[n]["x"] for n in ruta], [G.nodes[n]["y"] for n in ruta], color=color,
+                    lw=ancho, solid_capstyle="round", alpha=.95, zorder=3)
+        m = de_ruta(G, rutas["dijkstra"])
+        leyenda.append(Line2D([], [], color=color, lw=min(ancho, 4),
+                              label=f"α = {alfa:g}: {m['longitud_m']:.0f} m, {m['exposicion']:.0f} baches"))
+    for n, txt in ((origen, "O"), (destino, "D")):
+        ax.plot(G.nodes[n]["x"], G.nodes[n]["y"], "o", color="black", ms=6, zorder=5)
+        ax.annotate(txt, (G.nodes[n]["x"], G.nodes[n]["y"]), xytext=(5, 5),
+                    textcoords="offset points", fontsize=9, weight="bold", zorder=6)
+    ax.legend(handles=leyenda, loc="upper left", bbox_to_anchor=(-.02, -.01), frameon=False, fontsize=8)
+    if all(iguales.values()):
+        nota = "Para cada α, Dijkstra, A* y Bellman-Ford obtuvieron la misma ruta."
+    else:
+        nota = "Para algún α los algoritmos obtuvieron rutas distintas de igual costo: " + str(iguales)
+    ax.set_title(f"Rutas calculadas sobre un mismo par — {titulo}
+{nota}", fontsize=10, pad=8)
+    _guardar(fig, f"rutas_{ciudad}")
+    return {"origen": origen, "destino": destino, "rutas_identicas_por_alfa": iguales}
+
+
 def main() -> None:
     import ejecutar
+    import osmnx as ox
 
     p = argparse.ArgumentParser(description="Mapas estáticos por ciudad")
     p.add_argument("--area", default="encarnacion", choices=list(CFG["areas"]))
-    p.add_argument("--config", default="C2", choices=list(CFG["configuraciones"]))
+    p.add_argument("--modelo", default=None, help="por omisión, todos los del área")
     args = p.parse_args()
 
     a = cfg_area(args.area)
-    ciudad = a["nombre"].split(",")[0].strip().lower().replace(" ", "_")
-    titulo = a["nombre"].split(",")[0].strip()
-    print(f"== {a['nombre']}")
-
+    titulo_base = a["nombre"].split(",")[0].strip()
+    base = titulo_base.lower().replace(" ", "_")
     G = gr.construir(a)
     gr.aplicar_correcciones_sentido(G)
-    regs, info = ejecutar.registros_de(a, args.area, args.config,
-                                       CFG["semilla_maestra"])
-    G, asig = gr.asignar_severidad(G, regs, a["epsg_metrico"])
+    nodos, _ = ox.convert.graph_to_gdfs(G)
 
-    import osmnx as ox
-    nodos, aristas = ox.convert.graph_to_gdfs(G)
-    puntos = gpd.GeoSeries([Point(r["lon"], r["lat"]) for r in regs],
-                           crs="EPSG:4326").to_crs(epsg=a["epsg_metrico"])
-    clases = [r["clase"] for r in regs]
-
-    mapa_red(G, aristas, nodos, puntos, clases, ciudad, titulo,
-             sinteticas=info.get("clases_transferidas", False))
-    mapa_severidad(G, aristas, ciudad, titulo)
-    mapa_sentidos(G, aristas, ciudad, titulo)
+    for modelo in ([args.modelo] if args.modelo else a["modelos"]):
+        ciudad = base if modelo == "observado" else f"{base}_{modelo.lower()}"
+        titulo = titulo_base if modelo == "observado" else f"{titulo_base}, {modelo}"
+        print(f"== {a['nombre']} · {modelo}")
+        regs, info = ejecutar.registros_de(a, modelo, 0)
+        G, _ = gr.asignar_severidad(G, regs, a["epsg_metrico"])
+        _, aristas = ox.convert.graph_to_gdfs(G)
+        puntos = gpd.GeoSeries([Point(r["lon"], r["lat"]) for r in regs],
+                               crs="EPSG:4326").to_crs(epsg=a["epsg_metrico"])
+        nota = {"M1": "Clase asignada por sorteo (modelo 1, réplica 1): no describe el estado real de cada bache.",
+                "M2": "Agrupaciones formadas por registros a ≤ 10 m entre sí (modelo 2), reducidas a su centroide."
+                }.get(modelo, "")
+        mapa_red(G, aristas, nodos, puntos, [r["clase"] for r in regs], ciudad, titulo, nota)
+        mapa_severidad(G, aristas, ciudad, titulo)
+        info_rutas = mapa_rutas(G, aristas, ciudad, titulo)
+        print(f"   rutas idénticas entre algoritmos por α: {info_rutas['rutas_identicas_por_alfa']}")
+    mapa_sentidos(G, aristas, base, titulo_base)
 
 
 if __name__ == "__main__":

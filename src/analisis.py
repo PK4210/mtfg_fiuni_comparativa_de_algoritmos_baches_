@@ -1,7 +1,21 @@
-"""Agregación de las mediciones y generación de las salidas del Capítulo 5.
+"""Agregación de las mediciones, pruebas estadísticas y figuras del Capítulo 5.
 
-Lee `resultados/tablas/mediciones_<area>.csv` y produce las tablas y figuras
-comparativas. No mide nada: solo resume lo que `ejecutar.py` registró.
+Lee `resultados/tablas/mediciones_<area>.csv` y produce las tablas y figuras.
+No mide nada: solo resume lo que `ejecutar.py` registró.
+
+Unidad de análisis (PTFG rev6, protocolo, párrafos 5 y 6): la mediana de las
+cuatro repeticiones válidas de cada consulta. Los 200 pares forman un diseño
+pareado: el mismo par se resuelve con los tres algoritmos. En el modelo 1 de
+Jersey City hay 30 réplicas del sorteo de clases sobre los mismos pares: las
+pruebas usan, por par, el promedio de las 30 réplicas, y las tablas informan la
+media y la desviación estándar de cada estadístico entre réplicas.
+
+Pruebas, por ciudad, modelo y α:
+  - Friedman sobre los tres algoritmos (bloques = pares), con la W de Kendall
+    como tamaño del efecto;
+  - si Friedman es significativa, Wilcoxon de rangos con signo para cada par
+    de algoritmos, con los p-valores ajustados por el procedimiento de Holm;
+  - factor de aceleración de A* respecto de Dijkstra.
 
 Uso:
     python src/analisis.py --area encarnacion
@@ -9,24 +23,27 @@ Uso:
 from __future__ import annotations
 
 import argparse
-import collections
-import csv
-import statistics as st
+import json
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from scipy import stats
 
-from config import RES_FIGURAS, RES_TABLAS
+from config import CFG, RES_FIGURAS, RES_TABLAS
 
-ETIQUETAS = {"dijkstra": "Dijkstra", "a_estrella": "A*",
-             "bellman_ford": "Bellman-Ford"}
-COLORES = {"dijkstra": "#2f5d7c", "a_estrella": "#9c4a21",
-           "bellman_ford": "#4f8a5b"}
+ALGOS = ["dijkstra", "a_estrella", "bellman_ford"]
+ETIQUETAS = {"dijkstra": "Dijkstra", "a_estrella": "A*", "bellman_ford": "Bellman-Ford"}
+COLORES = {"dijkstra": "#2f5d7c", "a_estrella": "#9c4a21", "bellman_ford": "#4f8a5b"}
+MARCAS = {"dijkstra": "o", "a_estrella": "s", "bellman_ford": "^"}
+NOMBRE_MODELO = {"observado": "clase observada", "M1": "modelo 1 (proporción igualada)",
+                 "M2": "modelo 2 (radio de 10 m)"}
 
 plt.rcParams.update({
     "font.family": "serif",
-    "font.serif": ["Times New Roman", "DejaVu Serif"],
+    "font.serif": ["Liberation Serif", "Times New Roman", "DejaVu Serif"],
     "font.size": 9,
     "savefig.bbox": "tight",
     "savefig.pad_inches": 0.06,
@@ -34,302 +51,283 @@ plt.rcParams.update({
 CM = 1 / 2.54
 
 
-def leer(area: str) -> list[dict]:
+# --- lectura ------------------------------------------------------------------
+def leer(area: str) -> pd.DataFrame:
     ruta = RES_TABLAS / f"mediciones_{area}.csv"
     if not ruta.exists():
-        raise SystemExit(f"Falta {ruta}. Ejecutá primero: python src/ejecutar.py "
-                         f"--area {area}")
-    with open(ruta, encoding="utf-8") as fh:
-        filas = list(csv.DictReader(fh))
-    for f in filas:
-        for k in ("alfa", "tiempo_ms", "longitud_m", "tiempo_s", "exposicion",
-                  "costo", "informatividad"):
-            f[k] = float(f[k]) if f[k] not in ("", "None", None) else None
-        for k in ("expandidos", "pasadas", "relajaciones", "aristas", "replica"):
-            f[k] = int(f[k]) if f[k] not in ("", "None", None) else 0
-    return filas
+        raise SystemExit(f"Falta {ruta}. Ejecutá primero: python src/ejecutar.py --area {area}")
+    df = pd.read_csv(ruta)
+    if not df["verificado"].all():
+        malos = df.loc[~df["verificado"], ["modelo", "replica", "alfa", "par"]].drop_duplicates()
+        raise SystemExit(f"Hay {len(malos)} consultas que no superaron la verificación de costos: "
+                         "la serie no es válida para comparar")
+    return df
 
 
-def _agrega(vals: list) -> tuple[float | None, float | None]:
-    limpios = [v for v in vals if v is not None]
-    if not limpios:
-        return None, None
-    return (st.mean(limpios),
-            st.pstdev(limpios) if len(limpios) > 1 else 0.0)
+def desvio_relativo(df: pd.DataFrame) -> pd.DataFrame:
+    """(L_α − L_0) / L_0 por par, algoritmo, modelo y réplica, en porcentaje."""
+    base = df[df["alfa"] == 0.0][["modelo", "replica", "par", "algoritmo", "longitud_m"]]
+    base = base.rename(columns={"longitud_m": "longitud_base"})
+    df = df.merge(base, on=["modelo", "replica", "par", "algoritmo"], how="left")
+    df["desvio_pct"] = 100 * (df["longitud_m"] - df["longitud_base"]) / df["longitud_base"]
+    return df
 
 
-def clave_condicion(f: dict) -> tuple:
-    """Identifica una condición experimental hasta el par origen-destino.
-
-    La réplica forma parte de la clave porque cada una sortea sus propios
-    pares: dos réplicas distintas ponderan la red de modo distinto, de manera
-    que un mismo par medido en réplicas diferentes no es la misma condición.
-    Omitirla permitiría promediar mediciones tomadas sobre grafos distintos.
-    """
-    return (f["configuracion"], f["replica"], f["alfa"],
-            f["origen"], f["destino"])
-
-
-def pares_comunes(filas: list[dict], algoritmos: tuple = ()) -> set:
-    """Pares origen-destino resueltos por todos los algoritmos considerados.
-
-    Bellman-Ford se ejecuta sobre una muestra menor, porque su costo es
-    O(n·m). Comparar medias calculadas sobre muestras distintas produciría
-    diferencias que no son atribuibles a los algoritmos, de modo que las
-    métricas se restringen a la intersección.
-
-    `algoritmos` permite acotar la intersección a un subconjunto: la
-    comparación entre Dijkstra y A* dispone de todos los pares del protocolo,
-    mientras que la comparación con Bellman-Ford queda limitada a su muestra.
-    """
-    por_algo = collections.defaultdict(set)
-    for f in filas:
-        if algoritmos and f["algoritmo"] not in algoritmos:
-            continue
-        por_algo[f["algoritmo"]].add(clave_condicion(f))
-    if not por_algo:
-        return set()
-    return set.intersection(*por_algo.values())
+# --- tablas ---------------------------------------------------------------------
+def _estadisticos(g: pd.DataFrame) -> dict:
+    """Estadísticos de un grupo (una réplica, un modelo, un α, un algoritmo)."""
+    t = g["tiempo_ms"]
+    return {
+        "n_pares": len(g),
+        "tiempo_ms_mediana": t.median(),
+        "tiempo_ms_q1": t.quantile(.25),
+        "tiempo_ms_q3": t.quantile(.75),
+        "tiempo_ms_media": t.mean(),
+        "expandidos_mediana": g["expandidos"].median(),
+        "relajaciones_mediana": g["relajaciones"].median(),
+        "pasadas_mediana": g["pasadas"].median(),
+        "longitud_m_media": g["longitud_m"].mean(),
+        "costo_media": g["costo"].mean(),
+        "exposicion_media": g["exposicion"].mean(),
+        "desvio_pct_media": g["desvio_pct"].mean(),
+        "informatividad_media": g["informatividad"].mean(),
+    }
 
 
-def tabla_por_algoritmo(filas: list[dict], area: str, algoritmos: tuple = (),
-                        sufijo: str = "") -> list[dict]:
-    """Una fila por combinación de configuración, alfa y algoritmo."""
-    comunes = pares_comunes(filas, algoritmos)
-    filas = [f for f in filas
-             if clave_condicion(f) in comunes
-             and (not algoritmos or f["algoritmo"] in algoritmos)]
-    cuales = ", ".join(ETIQUETAS.get(a, a) for a in algoritmos) or "los tres algoritmos"
-    print(f"   restringido a {len(comunes)} pares comunes a {cuales}")
-
-    grupos = collections.defaultdict(list)
-    for f in filas:
-        grupos[(f["configuracion"], f["alfa"], f["algoritmo"])].append(f)
-
-    salida = []
-    for (config, alfa, algo), g in sorted(grupos.items(),
-                                          key=lambda x: (x[0][0], x[0][1], x[0][2])):
-        t_med, t_desv = _agrega([f["tiempo_ms"] for f in g])
-        e_med, _ = _agrega([f["expandidos"] for f in g])
-        l_med, _ = _agrega([f["longitud_m"] for f in g])
-        s_med, _ = _agrega([f["tiempo_s"] for f in g])
-        x_med, _ = _agrega([f["exposicion"] for f in g])
-        i_med, _ = _agrega([f["informatividad"] for f in g])
-        salida.append({
-            "configuracion": config, "alfa": alfa,
-            "algoritmo": ETIQUETAS.get(algo, algo), "n": len(g),
-            "tiempo_ms_media": round(t_med, 4) if t_med else None,
-            "tiempo_ms_desv": round(t_desv, 4) if t_desv is not None else None,
-            "nodos_expandidos": round(e_med, 1) if e_med else None,
-            "longitud_m": round(l_med, 1) if l_med else None,
-            "tiempo_trayecto_s": round(s_med, 1) if s_med else None,
-            "exposicion": round(x_med, 3) if x_med is not None else None,
-            "informatividad": round(i_med, 4) if i_med else None,
-        })
-
-    ruta = RES_TABLAS / f"resumen_{area}{sufijo}.csv"
-    with open(ruta, "w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(salida[0]))
-        w.writeheader()
-        w.writerows(salida)
-    print(f"   tabla comparativa -> {ruta.name}")
-    return salida
+def tabla_resumen(df: pd.DataFrame, area: str) -> pd.DataFrame:
+    """Una fila por modelo, α y algoritmo. En M1: media y d. e. entre réplicas."""
+    por_replica = (df.groupby(["modelo", "replica", "alfa", "algoritmo"])
+                     .apply(lambda g: pd.Series(_estadisticos(g)), include_groups=False)
+                     .reset_index())
+    filas = []
+    for (modelo, alfa, algo), g in por_replica.groupby(["modelo", "alfa", "algoritmo"]):
+        fila = {"modelo": modelo, "alfa": alfa, "algoritmo": ETIQUETAS[algo],
+                "replicas": len(g)}
+        for col in g.columns:
+            if col in ("modelo", "replica", "alfa", "algoritmo"):
+                continue
+            fila[col] = g[col].mean()
+            if len(g) > 1 and col in ("tiempo_ms_mediana", "exposicion_media", "desvio_pct_media",
+                                      "longitud_m_media"):
+                fila[col + "_de_replicas"] = g[col].std(ddof=1)
+        filas.append(fila)
+    res = pd.DataFrame(filas)
+    orden = {a: i for i, a in enumerate(ETIQUETAS.values())}
+    res = res.sort_values(["modelo", "alfa", "algoritmo"], key=lambda s: s.map(orden) if s.name == "algoritmo" else s)
+    res.round(5).to_csv(RES_TABLAS / f"resumen_{area}.csv", index=False)
+    print(f"   tabla resumen -> resumen_{area}.csv")
+    return res
 
 
-def figura_tiempos(resumen: list[dict], area: str) -> None:
-    """Tiempo de cómputo por algoritmo frente al parámetro de penalización."""
-    fig, ax = plt.subplots(figsize=(13 * CM, 7.5 * CM))
-    for algo in ETIQUETAS.values():
-        pts = [(r["alfa"], r["tiempo_ms_media"]) for r in resumen
-               if r["algoritmo"] == algo and r["configuracion"] == resumen[0]["configuracion"]
-               and r["tiempo_ms_media"] is not None]
-        if not pts:
-            continue
-        pts.sort()
-        clave = [k for k, v in ETIQUETAS.items() if v == algo][0]
-        ax.plot([p[0] for p in pts], [p[1] for p in pts], marker="o", ms=4,
-                lw=1.4, label=algo, color=COLORES[clave])
-    ax.set_xlabel("parámetro de penalización α")
-    ax.set_ylabel("tiempo de cómputo medio [ms]")
-    ax.set_yscale("log")
-    ax.grid(alpha=.25, lw=.6)
-    ax.legend(frameon=False)
-    for lado in ("top", "right"):
-        ax.spines[lado].set_visible(False)
-    fig.savefig(RES_FIGURAS / f"tiempos_{area}.png", dpi=300)
-    fig.savefig(RES_FIGURAS / f"tiempos_{area}.pdf")
+def _holm(pvalores: list[float]) -> list[float]:
+    """Ajuste de Holm (1979): p ordenados, multiplicados por (m − i), monótonos."""
+    m = len(pvalores)
+    orden = sorted(range(m), key=lambda i: pvalores[i])
+    ajustados, acumulado = [0.0] * m, 0.0
+    for rango, i in enumerate(orden):
+        acumulado = max(acumulado, min(1.0, (m - rango) * pvalores[i]))
+        ajustados[i] = acumulado
+    return ajustados
+
+
+def pruebas(df: pd.DataFrame, area: str) -> pd.DataFrame:
+    """Friedman, W de Kendall, Wilcoxon con Holm y aceleración de A*, por modelo y α."""
+    sig = CFG["experimento"]["significacion"]
+    # por par: promedio entre réplicas (en M1) de la mediana de cada consulta
+    por_par = (df.groupby(["modelo", "alfa", "par", "algoritmo"])["tiempo_ms"].mean()
+                 .unstack("algoritmo").reset_index())
+    filas = []
+    for (modelo, alfa), g in por_par.groupby(["modelo", "alfa"]):
+        g = g.dropna(subset=ALGOS)
+        n, k = len(g), len(ALGOS)
+        chi2, p_f = stats.friedmanchisquare(*[g[a].to_numpy() for a in ALGOS])
+        fila = {"modelo": modelo, "alfa": alfa, "n_pares": n,
+                "friedman_chi2": chi2, "friedman_p": p_f,
+                "kendall_w": chi2 / (n * (k - 1)),
+                "friedman_significativa": bool(p_f < sig)}
+        comparaciones = [("dijkstra", "a_estrella"), ("dijkstra", "bellman_ford"),
+                         ("a_estrella", "bellman_ford")]
+        crudos = []
+        for a, b in comparaciones:
+            w, p = stats.wilcoxon(g[a], g[b])
+            crudos.append(p)
+            fila[f"wilcoxon_{a}_vs_{b}_W"] = w
+            fila[f"wilcoxon_{a}_vs_{b}_p"] = p
+        for (a, b), p_h in zip(comparaciones, _holm(crudos)):
+            fila[f"wilcoxon_{a}_vs_{b}_p_holm"] = p_h
+            fila[f"wilcoxon_{a}_vs_{b}_significativa"] = bool(fila["friedman_significativa"] and p_h < sig)
+        cociente = g["dijkstra"] / g["a_estrella"]
+        fila["aceleracion_astar_mediana_por_par"] = cociente.median()
+        fila["aceleracion_astar_q1"] = cociente.quantile(.25)
+        fila["aceleracion_astar_q3"] = cociente.quantile(.75)
+        fila["aceleracion_astar_cociente_de_medianas"] = g["dijkstra"].median() / g["a_estrella"].median()
+        fila["bellman_ford_sobre_dijkstra_mediana"] = (g["bellman_ford"] / g["dijkstra"]).median()
+        filas.append(fila)
+    res = pd.DataFrame(filas)
+    res.to_csv(RES_TABLAS / f"pruebas_{area}.csv", index=False, float_format="%.6g")
+    print(f"   pruebas estadísticas -> pruebas_{area}.csv")
+    return res
+
+
+def replicas_significativas(df: pd.DataFrame, area: str) -> pd.DataFrame | None:
+    """En M1: en cuántas de las 30 réplicas Friedman resulta significativa."""
+    m1 = df[df["modelo"] == "M1"]
+    if m1.empty or m1["replica"].nunique() < 2:
+        return None
+    sig = CFG["experimento"]["significacion"]
+    filas = []
+    for (alfa, rep), g in m1.groupby(["alfa", "replica"]):
+        t = g.pivot(index="par", columns="algoritmo", values="tiempo_ms").dropna()
+        _, p = stats.friedmanchisquare(*[t[a] for a in ALGOS])
+        filas.append({"alfa": alfa, "replica": rep, "p": p,
+                      "aceleracion": (t["dijkstra"] / t["a_estrella"]).median()})
+    r = pd.DataFrame(filas)
+    res = r.groupby("alfa").agg(replicas=("p", "size"),
+                                significativas=("p", lambda s: int((s < sig).sum())),
+                                aceleracion_media=("aceleracion", "mean"),
+                                aceleracion_de=("aceleracion", "std")).reset_index()
+    res.to_csv(RES_TABLAS / f"replicas_m1_{area}.csv", index=False, float_format="%.6g")
+    print(f"   réplicas del modelo 1 -> replicas_m1_{area}.csv")
+    return res
+
+
+# --- figuras ---------------------------------------------------------------------
+def _guardar(fig, nombre: str) -> None:
+    dpi = CFG["visualizacion"]["dpi_figuras"]
+    for ext in ("png", "pdf"):
+        fig.savefig(RES_FIGURAS / f"{nombre}.{ext}", dpi=dpi)
     plt.close(fig)
-    print(f"   figura -> tiempos_{area}.png")
+    print(f"   -> {nombre}.png")
 
 
-def figura_heuristica(resumen: list[dict], area: str) -> None:
-    """Informatividad de la heurística y nodos expandidos frente a α.
+def _paneles(modelos: list[str]):
+    fig, ejes = plt.subplots(1, len(modelos), figsize=(15.5 * CM, 6.2 * CM), sharey=True,
+                             squeeze=False)
+    return fig, ejes[0]
 
-    Es la figura que contrasta la hipótesis de la sección 2.5.
-    """
-    base = [r for r in resumen if r["configuracion"] == resumen[0]["configuracion"]]
-    inf = sorted((r["alfa"], r["informatividad"]) for r in base
-                 if r["algoritmo"] == "A*" and r["informatividad"] is not None)
-    if not inf:
+
+def figura_tiempos(res: pd.DataFrame, area: str) -> None:
+    """Mediana del tiempo de cómputo por algoritmo frente a α (escala logarítmica)."""
+    modelos = list(res["modelo"].unique())
+    fig, ejes = _paneles(modelos)
+    for ax, modelo in zip(ejes, modelos):
+        r = res[res["modelo"] == modelo]
+        for algo in ALGOS:
+            s = r[r["algoritmo"] == ETIQUETAS[algo]].sort_values("alfa")
+            ax.errorbar(s["alfa"], s["tiempo_ms_mediana"],
+                        yerr=[s["tiempo_ms_mediana"] - s["tiempo_ms_q1"],
+                              s["tiempo_ms_q3"] - s["tiempo_ms_mediana"]],
+                        color=COLORES[algo], marker=MARCAS[algo], ms=4, lw=1.2, capsize=2,
+                        label=ETIQUETAS[algo])
+        ax.set_yscale("log")
+        ax.set_xlabel("α")
+        ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
+        ax.grid(alpha=.3, which="both", lw=.4)
+    ejes[0].set_ylabel("tiempo de cómputo [ms]")
+    ejes[0].legend(frameon=False, fontsize=8)
+    _guardar(fig, f"tiempos_{area}")
+
+
+def figura_esfuerzo(res: pd.DataFrame, area: str) -> None:
+    """Nodos expandidos por Dijkstra y A*, e informatividad de la heurística, frente a α."""
+    modelos = list(res["modelo"].unique())
+    fig, ejes = _paneles(modelos)
+    for ax, modelo in zip(ejes, modelos):
+        r = res[res["modelo"] == modelo]
+        for algo in ("dijkstra", "a_estrella"):
+            s = r[r["algoritmo"] == ETIQUETAS[algo]].sort_values("alfa")
+            ax.plot(s["alfa"], s["expandidos_mediana"], color=COLORES[algo],
+                    marker=MARCAS[algo], ms=4, lw=1.2, label=f"{ETIQUETAS[algo]}: nodos expandidos")
+        ax2 = ax.twinx()
+        s = r[r["algoritmo"] == "A*"].sort_values("alfa")
+        ax2.plot(s["alfa"], s["informatividad_media"], color="#555", ls="--", lw=1, marker="x",
+                 ms=4, label="A*: h(origen) / costo")
+        ax2.set_ylim(0, 1.05)
+        if ax is ejes[-1]:
+            ax2.set_ylabel("informatividad de la heurística")
+        else:
+            ax2.set_yticklabels([])
+        ax.set_xlabel("α")
+        ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
+        ax.grid(alpha=.3, lw=.4)
+    ejes[0].set_ylabel("nodos expandidos (mediana)")
+    h1, l1 = ejes[0].get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ejes[0].legend(h1 + h2, l1 + l2, frameon=False, fontsize=7.5, loc="upper left")
+    _guardar(fig, f"esfuerzo_{area}")
+
+
+def figura_compromiso(res: pd.DataFrame, area: str) -> None:
+    """Exposición media frente a desvío medio de longitud, para cada α (rutas de Dijkstra)."""
+    modelos = list(res["modelo"].unique())
+    fig, ejes = _paneles(modelos)
+    for ax, modelo in zip(ejes, modelos):
+        s = res[(res["modelo"] == modelo) & (res["algoritmo"] == "Dijkstra")].sort_values("alfa")
+        ax.plot(s["desvio_pct_media"], s["exposicion_media"], color="#2f5d7c", marker="o", ms=4, lw=1.2)
+        for _, f in s.iterrows():
+            ax.annotate(f"α = {f['alfa']:g}", (f["desvio_pct_media"], f["exposicion_media"]),
+                        textcoords="offset points", xytext=(4, 3), fontsize=7)
+        ax.set_xlabel("desvío de longitud respecto de α = 0 [%]")
+        ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
+        ax.grid(alpha=.3, lw=.4)
+    ejes[0].set_ylabel("exposición media [baches por ruta]")
+    _guardar(fig, f"compromiso_{area}")
+
+
+def figura_replicas(df: pd.DataFrame, area: str) -> None:
+    """Modelo 1: distribución entre réplicas de la exposición media y de la aceleración de A*."""
+    m1 = df[df["modelo"] == "M1"]
+    if m1.empty or m1["replica"].nunique() < 2:
         return
-    fig, ax = plt.subplots(figsize=(13 * CM, 7.5 * CM))
-    ax.plot([p[0] for p in inf], [p[1] for p in inf], marker="o", ms=4, lw=1.4,
-            color=COLORES["a_estrella"], label="informatividad de la heurística")
-    ax.set_xlabel("parámetro de penalización α")
-    ax.set_ylabel("razón h(origen) / costo real")
-    ax.set_ylim(0, 1.05)
-
-    ax2 = ax.twinx()
-    for algo, clave in (("A*", "a_estrella"), ("Dijkstra", "dijkstra")):
-        pts = sorted((r["alfa"], r["nodos_expandidos"]) for r in base
-                     if r["algoritmo"] == algo and r["nodos_expandidos"])
-        if pts:
-            ax2.plot([p[0] for p in pts], [p[1] for p in pts], ls="--", lw=1.2,
-                     marker="s", ms=3, color=COLORES[clave],
-                     label=f"nodos expandidos · {algo}")
-    ax2.set_ylabel("nodos expandidos (media)")
-
-    lineas = ax.get_lines() + ax2.get_lines()
-    ax.legend(lineas, [l.get_label() for l in lineas], frameon=False, fontsize=8)
-    ax.grid(alpha=.25, lw=.6)
-    fig.savefig(RES_FIGURAS / f"heuristica_{area}.png", dpi=300)
-    fig.savefig(RES_FIGURAS / f"heuristica_{area}.pdf")
-    plt.close(fig)
-    print(f"   figura -> heuristica_{area}.png")
+    alfas = sorted(m1["alfa"].unique())
+    expo = [m1[(m1["alfa"] == a) & (m1["algoritmo"] == "dijkstra")].groupby("replica")["exposicion"].mean()
+            for a in alfas]
+    acel = []
+    for a in alfas:
+        t = m1[m1["alfa"] == a].pivot_table(index=["replica", "par"], columns="algoritmo", values="tiempo_ms")
+        acel.append((t["dijkstra"] / t["a_estrella"]).groupby("replica").median())
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15.5 * CM, 6.2 * CM))
+    ax1.boxplot(expo, tick_labels=[f"{a:g}" for a in alfas], widths=.5)
+    ax1.set_xlabel("α")
+    ax1.set_ylabel("exposición media [baches por ruta]")
+    ax2.boxplot(acel, tick_labels=[f"{a:g}" for a in alfas], widths=.5)
+    ax2.set_xlabel("α")
+    ax2.set_ylabel("aceleración de A* (mediana por réplica)")
+    for ax in (ax1, ax2):
+        ax.grid(alpha=.3, lw=.4)
+    fig.suptitle(f"Dispersión entre las {m1['replica'].nunique()} réplicas del modelo 1", fontsize=9)
+    _guardar(fig, f"replicas_m1_{area}")
 
 
-def figura_compromiso(resumen: list[dict], area: str) -> None:
-    """Longitud frente a exposición: el precio de esquivar el deterioro."""
-    base = [r for r in resumen
-            if r["algoritmo"] == "Dijkstra"
-            and r["configuracion"] == resumen[0]["configuracion"]
-            and r["longitud_m"] and r["exposicion"] is not None]
-    if len(base) < 2:
-        return
-    base.sort(key=lambda r: r["alfa"])
-    fig, ax = plt.subplots(figsize=(13 * CM, 7.5 * CM))
-    ax.plot([r["longitud_m"] for r in base], [r["exposicion"] for r in base],
-            marker="o", ms=5, lw=1.4, color=COLORES["dijkstra"])
-    for r in base:
-        ax.annotate(f"α = {r['alfa']:g}",
-                    (r["longitud_m"], r["exposicion"]),
-                    textcoords="offset points", xytext=(6, 5), fontsize=8)
-    ax.set_xlabel("longitud media de la ruta [m]")
-    ax.set_ylabel("exposición acumulada media")
-    ax.grid(alpha=.25, lw=.6)
-    for lado in ("top", "right"):
-        ax.spines[lado].set_visible(False)
-    fig.savefig(RES_FIGURAS / f"compromiso_{area}.png", dpi=300)
-    fig.savefig(RES_FIGURAS / f"compromiso_{area}.pdf")
-    plt.close(fig)
-    print(f"   figura -> compromiso_{area}.png")
-
-
-def tabla_dispersion(filas: list[dict], area: str,
-                     algoritmos: tuple = ("dijkstra", "a_estrella")) -> list[dict]:
-    """Dispersión de las métricas entre réplicas de asignación de clases.
-
-    Solo tiene sentido en la red de contraste, cuyas clases se sortean: cada
-    réplica es un sorteo distinto con la misma distribución. La desviación
-    típica entre réplicas mide cuánto de lo observado depende del sorteo y
-    cuánto de la estructura de la red. En la red principal las clases son
-    observadas y hay una sola réplica, de modo que no hay nada que dispersar.
-    """
-    if len({f["replica"] for f in filas}) < 2:
-        return []
-
-    # la dispersión se calcula sobre la muestra completa del protocolo y no
-    # sobre los treinta pares de Bellman-Ford: las métricas de ruta coinciden
-    # en los tres algoritmos, de modo que restringirlas a la muestra menor solo
-    # ensancharía el intervalo sin cambiar el valor central
-    comunes = pares_comunes(filas, algoritmos)
-    filas = [f for f in filas if clave_condicion(f) in comunes
-             and f["algoritmo"] in algoritmos]
-
-    # primero se promedia dentro de cada réplica; después se dispersa entre ellas
-    por_replica = collections.defaultdict(lambda: collections.defaultdict(list))
-    for f in filas:
-        clave = (f["configuracion"], f["alfa"], f["algoritmo"])
-        por_replica[clave][f["replica"]].append(f)
-
-    salida = []
-    for (config, alfa, algo), reps in sorted(por_replica.items()):
-        medias = {m: [] for m in ("exposicion", "longitud_m", "expandidos",
-                                  "tiempo_ms")}
-        for _, g in sorted(reps.items()):
-            for m in medias:
-                v = [f[m] for f in g if f[m] is not None]
-                if v:
-                    medias[m].append(st.mean(v))
-        fila = {"configuracion": config, "alfa": alfa,
-                "algoritmo": ETIQUETAS.get(algo, algo), "replicas": len(reps)}
-        for m, etiqueta in (("exposicion", "exposicion"),
-                            ("longitud_m", "longitud_m"),
-                            ("expandidos", "nodos_expandidos"),
-                            ("tiempo_ms", "tiempo_ms")):
-            v = medias[m]
-            fila[f"{etiqueta}_media"] = round(st.mean(v), 4) if v else None
-            fila[f"{etiqueta}_desv"] = (round(st.stdev(v), 4)
-                                        if len(v) > 1 else 0.0)
-            fila[f"{etiqueta}_cv_pct"] = (
-                round(100 * st.stdev(v) / st.mean(v), 2)
-                if len(v) > 1 and st.mean(v) else None)
-        salida.append(fila)
-
-    ruta = RES_TABLAS / f"dispersion_{area}.csv"
-    with open(ruta, "w", encoding="utf-8", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(salida[0]))
-        w.writeheader()
-        w.writerows(salida)
-    print(f"   dispersión entre réplicas -> {ruta.name}")
-    return salida
-
-
-def figura_dispersion(disp: list[dict], area: str) -> None:
-    """Exposición media por configuración, con la dispersión entre réplicas."""
-    base = [r for r in disp if r["algoritmo"] == "Dijkstra"]
-    if not base:
-        return
-    fig, ax = plt.subplots(figsize=(13 * CM, 7.5 * CM))
-    estilos = {"C2": ("-", "o"), "C3": ("--", "s")}
-    for config in sorted({r["configuracion"] for r in base}):
-        pts = sorted((r["alfa"], r["exposicion_media"], r["exposicion_desv"])
-                     for r in base if r["configuracion"] == config)
-        ls, marca = estilos.get(config, ("-", "o"))
-        ax.errorbar([p[0] for p in pts], [p[1] for p in pts],
-                    yerr=[p[2] for p in pts], ls=ls, marker=marca, ms=4,
-                    lw=1.4, capsize=3, color=COLORES["dijkstra"]
-                    if config == "C2" else COLORES["bellman_ford"],
-                    label=f"configuración {config}")
-    ax.set_xlabel("parámetro de penalización α")
-    ax.set_ylabel("exposición acumulada media")
-    ax.grid(alpha=.25, lw=.6)
-    ax.legend(frameon=False)
-    for lado in ("top", "right"):
-        ax.spines[lado].set_visible(False)
-    fig.savefig(RES_FIGURAS / f"dispersion_{area}.png", dpi=300)
-    fig.savefig(RES_FIGURAS / f"dispersion_{area}.pdf")
-    plt.close(fig)
-    print(f"   figura -> dispersion_{area}.png")
+def verificacion(df: pd.DataFrame, area: str) -> None:
+    """Resumen de la verificación de costos: consultas verificadas por modelo y α."""
+    v = (df.groupby(["modelo", "alfa"])
+           .agg(consultas=("verificado", "size"), verificadas=("verificado", "sum")).reset_index())
+    v.to_csv(RES_TABLAS / f"verificacion_{area}.csv", index=False)
+    print(f"   verificación: {int(v['verificadas'].sum())} de {int(v['consultas'].sum())} "
+          "consultas con costo idéntico entre los tres algoritmos y NetworkX")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Análisis de las mediciones")
-    p.add_argument("--area", default="encarnacion")
+    p = argparse.ArgumentParser(description="Análisis del Capítulo 5")
+    p.add_argument("--area", default="encarnacion", choices=list(CFG["areas"]))
+    p.add_argument("--prueba", action="store_true", help="analiza la corrida de prueba")
     args = p.parse_args()
 
-    filas = leer(args.area)
-    print(f"== {args.area}: {len(filas)} mediciones")
-    resumen = tabla_por_algoritmo(filas, args.area)
-    # la comparacion entre Dijkstra y A* dispone de todos los pares del
-    # protocolo; solo Bellman-Ford obliga a recortar la muestra
-    tabla_por_algoritmo(filas, args.area, ("dijkstra", "a_estrella"), "_par")
-    figura_tiempos(resumen, args.area)
-    figura_heuristica(resumen, args.area)
-    figura_compromiso(resumen, args.area)
-    disp = tabla_dispersion(filas, args.area)
-    if disp:
-        figura_dispersion(disp, args.area)
+    area = args.area + ("_prueba" if args.prueba else "")
+    print(f"== análisis: {area}")
+    df = desvio_relativo(leer(area))
+    verificacion(df, area)
+    res = tabla_resumen(df, area)
+    pr = pruebas(df, area)
+    replicas_significativas(df, area)
+    figura_tiempos(res, area)
+    figura_esfuerzo(res, area)
+    figura_compromiso(res, area)
+    figura_replicas(df, area)
+    resumen = pr[["modelo", "alfa", "friedman_p", "kendall_w",
+                  "aceleracion_astar_mediana_por_par"]].round(4)
+    print(resumen.to_string(index=False))
 
 
 if __name__ == "__main__":

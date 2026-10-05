@@ -94,11 +94,10 @@ def dijkstra(G, origen, destino) -> Traza:
 
 
 def a_estrella(G, origen, destino) -> Traza:
-    c_min = G.graph["c_min"]
     g = {origen: 0.0}
     pred: dict = {}
     cerrados: set = set()
-    cola = [(heuristica(G, origen, destino, c_min), origen)]
+    cola = [(heuristica(G, origen, destino), origen)]
     tope = G.number_of_nodes()
     orden, frontera, arbol, cam_exp, cam_dest = [], [], [], [], []
 
@@ -119,7 +118,7 @@ def a_estrella(G, origen, destino) -> Traza:
             if alt < g.get(v, math.inf):
                 g[v] = alt
                 pred[v] = u
-                heapq.heappush(cola, (alt + heuristica(G, v, destino, c_min), v))
+                heapq.heappush(cola, (alt + heuristica(G, v, destino), v))
 
     return Traza(_reconstruir(pred, origen, destino), g.get(destino),
                  orden=orden, frontera=frontera, arbol=arbol,

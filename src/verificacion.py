@@ -1,9 +1,12 @@
-"""Verificación y validación (sección 3.2.6 de la memoria).
+"""Comprobaciones de verificación complementarias.
 
-Tres comprobaciones independientes:
-  1. Comprobación cruzada de optimalidad entre los tres algoritmos.
-  2. Contraste contra la implementación de referencia de NetworkX.
-  3. Admisibilidad de la heurística empleada por A*.
+La verificación principal (los tres algoritmos y NetworkX deben dar el mismo
+costo óptimo en cada par y cada α, con tolerancia relativa de 10⁻⁹) se hace
+dentro de `experimento.ejecutar`, sobre toda la muestra. Este módulo agrega:
+  - comprobación cruzada y contraste con NetworkX sobre una muestra (uso suelto);
+  - admisibilidad de la heurística de A*;
+  - integridad del grafo, respeto del sentido de circulación y coherencia de
+    las trazas que se usan para las animaciones.
 """
 from __future__ import annotations
 
@@ -13,7 +16,13 @@ import networkx as nx
 
 import algoritmos as alg
 
-TOL = 1e-6
+from config import CFG
+
+TOL = CFG["experimento"]["tolerancia_relativa"]
+
+
+def _distintos(a: float, b: float) -> bool:
+    return abs(a - b) > TOL * max(abs(a), abs(b), 1e-12)
 
 
 def optimalidad_cruzada(G, pares) -> dict:
@@ -27,7 +36,7 @@ def optimalidad_cruzada(G, pares) -> dict:
         if len(validos) < 2:
             continue
         comparados += 1
-        if max(validos) - min(validos) > TOL:
+        if _distintos(max(validos), min(validos)):
             fallas.append({"par": (origen, destino), "costos": costos})
     return {"comparados": comparados, "discrepancias": len(fallas),
             "detalle": fallas[:5]}
@@ -45,7 +54,7 @@ def contra_networkx(G, pares) -> dict:
         if propio is None:
             continue
         comparados += 1
-        if abs(propio - referencia) > TOL:
+        if _distintos(propio, referencia):
             fallas.append({"par": (origen, destino),
                            "propio": propio, "networkx": referencia})
     return {"comparados": comparados, "discrepancias": len(fallas),
@@ -54,16 +63,15 @@ def contra_networkx(G, pares) -> dict:
 
 def admisibilidad(G, pares) -> dict:
     """h(n) nunca debe superar el costo real mínimo hasta el destino."""
-    c_min = G.graph["c_min"]
     violaciones, comprobados = 0, 0
     peor = 0.0
     for _, destino in pares:
         reales = nx.shortest_path_length(G, target=destino, weight="peso")
         for nodo, real in reales.items():
-            h = alg.heuristica(G, nodo, destino, c_min)
+            h = alg.heuristica(G, nodo, destino)
             comprobados += 1
             exceso = h - real
-            if exceso > TOL:
+            if exceso > TOL * max(real, 1.0):
                 violaciones += 1
                 peor = max(peor, exceso)
     return {"comprobados": comprobados, "violaciones": violaciones,
@@ -108,7 +116,7 @@ def trazas_coherentes(G, pares) -> dict:
             comparados += 1
             if r.expandidos != len(t.orden) or (
                     r.costo is not None and t.costo is not None
-                    and abs(r.costo - t.costo) > TOL):
+                    and _distintos(r.costo, t.costo)):
                 discrepancias.append({
                     "algoritmo": nombre, "par": (origen, destino),
                     "expandidos": (r.expandidos, len(t.orden)),

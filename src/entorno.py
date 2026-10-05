@@ -59,7 +59,8 @@ def describir() -> dict:
             "$([math]::Round($d.Size/1e9,1)) GB)\"")
         datos["unidad_del_proyecto"] = f"{letra}:"
 
-    for paquete in ("osmnx", "networkx", "geopandas", "shapely", "matplotlib"):
+    for paquete in ("osmnx", "networkx", "geopandas", "shapely", "pyproj", "pandas",
+                    "numpy", "scipy", "matplotlib"):
         try:
             datos[f"version_{paquete}"] = __import__(paquete).__version__
         except Exception:

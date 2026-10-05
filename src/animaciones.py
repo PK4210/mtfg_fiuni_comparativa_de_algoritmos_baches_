@@ -31,6 +31,7 @@ Uso:
 from __future__ import annotations
 
 import argparse
+import math
 import random
 import time
 
@@ -76,8 +77,7 @@ def elegir_par(G, semilla: int) -> tuple:
     for _ in range(400):
         o, d = rng.sample(nodos, 2)
         a, b = G.nodes[o], G.nodes[d]
-        candidatos.append(
-            (alg._haversine(a["lat"], a["lon"], b["lat"], b["lon"]), o, d))
+        candidatos.append((math.hypot(a["x"] - b["x"], a["y"] - b["y"]), o, d))
     candidatos.sort()
     corte = int(len(candidatos) * CFG["visualizacion"]["cuantil_distancia_par"])
     return candidatos[corte][1], candidatos[corte][2]
@@ -341,7 +341,7 @@ def main() -> None:
 
     p = argparse.ArgumentParser(description="Videos de la búsqueda")
     p.add_argument("--area", default="encarnacion", choices=list(CFG["areas"]))
-    p.add_argument("--config", default="C2", choices=list(CFG["configuraciones"]))
+    p.add_argument("--modelo", default=None, help="por omisión, el primero del área")
     p.add_argument("--alfa", type=float, default=None,
                    help="un solo valor; por omisión, todos los de config.yaml")
     args = p.parse_args()
@@ -353,15 +353,14 @@ def main() -> None:
 
     G = gr.construir(a)
     gr.aplicar_correcciones_sentido(G)
-    regs, _ = ejecutar.registros_de(a, args.area, args.config,
-                                    CFG["semilla_maestra"])
+    regs, _ = ejecutar.registros_de(a, args.modelo or a["modelos"][0], 0)
     G, _ = gr.asignar_severidad(G, regs, a["epsg_metrico"])
     _, aristas = ox.convert.graph_to_gdfs(G)
 
     G = gr.ponderar(G, 0.0)
     origen, destino = elegir_par(G, CFG["semilla_maestra"])
-    d = alg._haversine(G.nodes[origen]["lat"], G.nodes[origen]["lon"],
-                       G.nodes[destino]["lat"], G.nodes[destino]["lon"])
+    import experimento as exp
+    d = exp.distancia_recta(G, origen, destino)
     print(f"   par origen-destino: {origen} -> {destino}  ({d:.0f} m en línea recta)")
 
     alfas = [args.alfa] if args.alfa is not None else CFG["costo"]["alfas"]

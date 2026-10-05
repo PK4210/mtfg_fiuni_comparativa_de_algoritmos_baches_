@@ -1,9 +1,18 @@
-"""Lectura y depuración de los conjuntos de baches.
+"""Lectura, depuración y asignación de clase de los conjuntos de baches.
 
 Encarnación llega como KML de Google My Maps: la clase de cada marca no es un
-campo de texto sino el color del icono, de modo que hay que resolver la
-referencia de estilo. Jersey City llega como CSV y no trae clase alguna: se le
-transfiere la distribución observada en Encarnación (ecuaciones 13 y 14).
+campo de texto sino el color del ícono, de modo que hay que resolver la
+referencia de estilo. Esa clase la asignaron los autores del relevamiento y no
+se modifica: sobre Encarnación no se aplica ningún agrupamiento adicional.
+
+Jersey City llega como CSV de reparaciones y no trae clase: cada registro es un
+punto suelto. La clase se le asigna con uno de dos modelos (PTFG rev6,
+protocolo, párrafo 2), aplicados únicamente a ese conjunto:
+
+  M1  proporción igualada: la misma proporción de agrupaciones que Encarnación,
+      sorteada de forma uniforme y sin reposición.
+  M2  agrupación por radio: los registros a ≤ r metros entre sí, encadenados,
+      forman un grupo; cada grupo se reduce a su centroide con clase agrupación.
 """
 from __future__ import annotations
 
@@ -11,8 +20,9 @@ import collections
 import csv
 import io
 import random
-import re
 import xml.etree.ElementTree as ET
+
+from pyproj import Transformer
 
 from config import CFG
 
@@ -89,15 +99,21 @@ def leer_csv(ruta: str) -> list[dict]:
 
 # --- Depuración común -------------------------------------------------------
 def depurar(registros: list[dict], bbox: list[float]) -> tuple[list[dict], dict]:
-    """Descarta coordenadas fuera del recuadro y duplicados exactos."""
+    """Descarta coordenadas fuera del recuadro y registros idénticos.
+
+    Solo es duplicado un registro idéntico en todos sus campos. Dos reparaciones
+    en la misma dirección con fechas distintas son registros distintos: en
+    Jersey City 493 coordenadas aparecen en dos o más registros y ninguno de
+    ellos es idéntico a otro, de modo que se conservan los 6.664.
+    """
     oeste, sur, este, norte = bbox
     dentro, fuera, duplicados = [], 0, 0
-    vistos: set[tuple] = set()
+    vistos: set = set()
     for r in registros:
         if not (oeste <= r["lon"] <= este and sur <= r["lat"] <= norte):
             fuera += 1
             continue
-        clave = (round(r["lon"], 7), round(r["lat"], 7), r.get("clase"))
+        clave = tuple(sorted(r.items()))
         if clave in vistos:
             duplicados += 1
             continue
@@ -111,52 +127,87 @@ def depurar(registros: list[dict], bbox: list[float]) -> tuple[list[dict], dict]
     }
 
 
-# --- Transferencia de distribución (ecuaciones 13 y 14) ---------------------
-def proporciones(registros: list[dict]) -> dict[str, float]:
-    """p_k = n_k / N, ecuación (13)."""
-    conteos = collections.Counter(r["clase"] for r in registros)
-    total = sum(conteos.values())
-    return {k: c / total for k, c in conteos.items()}
+# --- Modelo 1: proporción igualada ------------------------------------------
+def modelo_proporcion(registros: list[dict], semilla: int) -> tuple[list[dict], dict]:
+    """Asigna la clase agrupación a exactamente round(p · N) registros al azar.
 
-
-def _reparte_en_configuracion(props: dict[str, float], config: str) -> dict[str, float]:
-    """C2 usa las clases observadas; C3 subdivide la mayoritaria en dos mitades."""
-    clases = CFG["configuraciones"][config]
-    if config == "C2":
-        return {k: props[k] for k in clases if k in props}
-    mayor = max(props, key=props.get)
-    salida = dict(props)
-    mitad = salida.pop(mayor) / 2
-    salida["individual"] = mitad
-    salida["intermedia"] = mitad
-    return {k: salida[k] for k in clases if k in salida}
-
-
-def transferir_distribucion(clases_origen: list[str], n_destino: int,
-                            semilla: int, config: str = "C2") -> list[str]:
-    """Aplica al conjunto destino las proporciones observadas en origen.
-
-    Devuelve un vector de longitud n_destino con las cantidades exactas por
-    clase, permutado al azar. Ecuaciones (13) y (14).
+    El sorteo es uniforme y sin reposición; el resto queda como individual.
     """
-    conteos = collections.Counter(clases_origen)
-    n_origen = sum(conteos.values())
-    props = _reparte_en_configuracion(
-        {k: c / n_origen for k, c in conteos.items()}, config)
-
-    orden = [k for k in CFG["clases"]["orden"] if k in props]
-    asignados: list[str] = []
-    for k in orden[:-1]:
-        asignados += [k] * round(props[k] * n_destino)
-    # la última clase absorbe el redondeo: la suma es exactamente n_destino
-    asignados += [orden[-1]] * (n_destino - len(asignados))
-
-    rng = random.Random(semilla)
-    rng.shuffle(asignados)                     # reparto espacialmente aleatorio
-    return asignados
+    p = CFG["modelos"]["M1"]["proporcion_agrupacion"]
+    n = len(registros)
+    k = round(p * n)
+    elegidos = set(random.Random(semilla).sample(range(n), k))
+    salida = [dict(r, clase="agrupacion" if i in elegidos else "individual")
+              for i, r in enumerate(registros)]
+    return salida, {"modelo": "M1", "semilla": semilla, "registros": n,
+                    "agrupaciones": k, "individuales": n - k,
+                    "pct_agrupaciones": round(100 * k / n, 2) if n else 0.0}
 
 
-def contribucion(clase: str) -> float:
-    """σ(r) = b(r) / b_máx, ecuación (12)."""
-    baches = CFG["clases"]["baches_representados"]
-    return baches[clase] / max(baches.values())
+# --- Modelo 2: agrupación por radio -----------------------------------------
+def modelo_radio(registros: list[dict], epsg: int,
+                 radio: float | None = None) -> tuple[list[dict], dict]:
+    """Agrupa por cercanía: componentes conexas del grafo «a ≤ r metros».
+
+    Equivale a DBSCAN con un mínimo de dos puntos por vecindad: dos registros a
+    distancia ≤ r quedan en el mismo grupo, y la relación se encadena. Cada
+    grupo se reemplaza por un único punto en el centroide de sus registros, con
+    clase agrupación; los registros aislados conservan la clase individual.
+    """
+    radio = CFG["modelos"]["M2"]["radio_m"] if radio is None else radio
+    a_metros = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    a_grados = Transformer.from_crs(f"EPSG:{epsg}", "EPSG:4326", always_xy=True)
+    xy = [a_metros.transform(r["lon"], r["lat"]) for r in registros]
+
+    padre = list(range(len(xy)))
+
+    def raiz(i: int) -> int:
+        while padre[i] != i:
+            padre[i] = padre[padre[i]]
+            i = padre[i]
+        return i
+
+    # rejilla de celdas de lado r: solo se comparan registros de celdas vecinas
+    celdas: dict = collections.defaultdict(list)
+    for i, (x, y) in enumerate(xy):
+        celdas[(int(x // radio), int(y // radio))].append(i)
+    r2 = radio * radio
+    for (cx, cy), propios in celdas.items():
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for j in celdas.get((cx + dx, cy + dy), ()):
+                    for i in propios:
+                        if i < j and (xy[i][0] - xy[j][0]) ** 2 + (xy[i][1] - xy[j][1]) ** 2 <= r2:
+                            a, b = raiz(i), raiz(j)
+                            if a != b:
+                                padre[a] = b
+
+    grupos: dict = collections.defaultdict(list)
+    for i in range(len(xy)):
+        grupos[raiz(i)].append(i)
+
+    salida, tamanos = [], []
+    for miembros in grupos.values():
+        if len(miembros) == 1:
+            salida.append(dict(registros[miembros[0]], clase="individual"))
+            continue
+        cx = sum(xy[i][0] for i in miembros) / len(miembros)
+        cy = sum(xy[i][1] for i in miembros) / len(miembros)
+        lon, lat = a_grados.transform(cx, cy)
+        tamanos.append(len(miembros))
+        salida.append({"id": "grupo de %d registros" % len(miembros), "lon": lon,
+                       "lat": lat, "clase": "agrupacion", "miembros": len(miembros)})
+
+    n_ind = sum(1 for r in salida if r["clase"] == "individual")
+    n_grp = len(tamanos)
+    return salida, {"modelo": "M2", "radio_m": radio, "registros": len(registros),
+                    "individuales": n_ind, "agrupaciones": n_grp,
+                    "registros_en_agrupaciones": sum(tamanos),
+                    "puntos_resultantes": n_ind + n_grp,
+                    "pct_agrupaciones": round(100 * n_grp / (n_ind + n_grp), 2) if salida else 0.0,
+                    "tamano_maximo": max(tamanos, default=0)}
+
+
+def aporte(clase: str) -> float:
+    """Baches que representa un registro: 1 si es individual, b si es agrupación."""
+    return float(CFG["clases"]["baches_representados"][clase])
