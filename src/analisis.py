@@ -28,6 +28,7 @@ import json
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter
 import numpy as np
 import pandas as pd
 from scipy import stats
@@ -49,6 +50,20 @@ plt.rcParams.update({
     "savefig.pad_inches": 0.06,
 })
 CM = 1 / 2.54
+
+
+def _num(x, _=None) -> str:
+    """Número con coma decimal, como en el texto de la memoria."""
+    return f"{x:g}".replace(".", ",")
+
+
+def _formato_es(ax, x: bool = True, log: bool = False) -> None:
+    if x:
+        ax.xaxis.set_major_formatter(FuncFormatter(_num))
+    ax.yaxis.set_major_formatter(FuncFormatter(_num))
+    if log:
+        ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5)))
+        ax.yaxis.set_minor_formatter(NullFormatter())
 
 
 # --- lectura ------------------------------------------------------------------
@@ -220,6 +235,7 @@ def figura_tiempos(res: pd.DataFrame, area: str) -> None:
                         color=COLORES[algo], marker=MARCAS[algo], ms=4, lw=1.2, capsize=2,
                         label=ETIQUETAS[algo])
         ax.set_yscale("log")
+        _formato_es(ax, log=True)
         ax.set_xlabel("α")
         ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
         ax.grid(alpha=.3, which="both", lw=.4)
@@ -243,6 +259,8 @@ def figura_esfuerzo(res: pd.DataFrame, area: str) -> None:
         ax2.plot(s["alfa"], s["informatividad_media"], color="#555", ls="--", lw=1, marker="x",
                  ms=4, label="A*: h(origen) / costo")
         ax2.set_ylim(0, 1.05)
+        _formato_es(ax)
+        _formato_es(ax2, x=False)
         if ax is ejes[-1]:
             ax2.set_ylabel("informatividad de la heurística")
         else:
@@ -264,9 +282,18 @@ def figura_compromiso(res: pd.DataFrame, area: str) -> None:
     for ax, modelo in zip(ejes, modelos):
         s = res[(res["modelo"] == modelo) & (res["algoritmo"] == "Dijkstra")].sort_values("alfa")
         ax.plot(s["desvio_pct_media"], s["exposicion_media"], color="#2f5d7c", marker="o", ms=4, lw=1.2)
+        rx = max(np.ptp(s["desvio_pct_media"]), 1e-9)
+        ry = max(np.ptp(s["exposicion_media"]), 1e-9)
+        previo = None
         for _, f in s.iterrows():
-            ax.annotate(f"α = {f['alfa']:g}", (f["desvio_pct_media"], f["exposicion_media"]),
-                        textcoords="offset points", xytext=(4, 3), fontsize=7)
+            x, y = f["desvio_pct_media"], f["exposicion_media"]
+            # si el punto anterior está casi encima, la etiqueta va debajo para no superponerse
+            cerca = previo is not None and abs(x - previo[0]) / rx < .05 and abs(y - previo[1]) / ry < .05
+            ax.annotate(f"α = {_num(f['alfa'])}", (x, y), textcoords="offset points",
+                        xytext=(5, -11) if cerca else (4, 3), fontsize=7)
+            previo = (x, y)
+        ax.margins(x=.2, y=.1)
+        _formato_es(ax)
         ax.set_xlabel("desvío de longitud respecto de α = 0 [%]")
         ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
         ax.grid(alpha=.3, lw=.4)
@@ -286,16 +313,17 @@ def figura_replicas(df: pd.DataFrame, area: str) -> None:
     for a in alfas:
         t = m1[m1["alfa"] == a].pivot_table(index=["replica", "par"], columns="algoritmo", values="tiempo_ms")
         acel.append((t["dijkstra"] / t["a_estrella"]).groupby("replica").median())
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15.5 * CM, 6.2 * CM))
-    ax1.boxplot(expo, tick_labels=[f"{a:g}" for a in alfas], widths=.5)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15.5 * CM, 6.2 * CM), layout="constrained")
+    mediana = {"color": "#9c4a21", "lw": 1.2}
+    ax1.boxplot(expo, tick_labels=[_num(a) for a in alfas], widths=.5, medianprops=mediana)
     ax1.set_xlabel("α")
     ax1.set_ylabel("exposición media [baches por ruta]")
-    ax2.boxplot(acel, tick_labels=[f"{a:g}" for a in alfas], widths=.5)
+    ax2.boxplot(acel, tick_labels=[_num(a) for a in alfas], widths=.5, medianprops=mediana)
     ax2.set_xlabel("α")
     ax2.set_ylabel("aceleración de A* (mediana por réplica)")
     for ax in (ax1, ax2):
         ax.grid(alpha=.3, lw=.4)
-    fig.suptitle(f"Dispersión entre las {m1['replica'].nunique()} réplicas del modelo 1", fontsize=9)
+        _formato_es(ax, x=False)
     _guardar(fig, f"replicas_m1_{area}")
 
 

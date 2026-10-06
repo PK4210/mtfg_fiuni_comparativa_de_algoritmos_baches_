@@ -24,6 +24,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.ticker import FuncFormatter
 import numpy as np
 from shapely.geometry import Point
 
@@ -121,6 +122,7 @@ def mapa_severidad(G, aristas, ciudad: str, titulo: str) -> None:
         barra = fig.colorbar(sm, ax=ax, fraction=.03, pad=.02)
         barra.set_label("índice de severidad  s(e)", fontsize=9)
         barra.outline.set_visible(False)
+        barra.ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.1f}".replace(".", ",")))
 
     pct = f"{100 * len(con) / len(aristas):.1f}".replace(".", ",")
     ax.set_title(f"Severidad por tramo — {titulo}\n"
