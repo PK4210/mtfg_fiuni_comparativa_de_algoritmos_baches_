@@ -1,5 +1,6 @@
 datos/derivados/*
 !datos/derivados/.gitkeep
+!datos/derivados/cache_osm/
 resultados/**/*.png
 resultados/**/*.pdf
 resultados/**/*.csv

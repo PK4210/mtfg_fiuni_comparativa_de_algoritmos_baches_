@@ -2,7 +2,7 @@
 
 Código y datos del Trabajo Final de Grado de **Pedro Kazlauskas Kondratiuk** y **Mohamed Ghaleb El Zein**, Facultad de Ingeniería — Universidad Nacional de Itapúa. Tutor: MSc. Nestor Tapia.
 
-La memoria (MTFG) se redacta en el vault de Obsidian, `E:\Obsidian\PK4210\TFG\MTFG\`. Este repositorio contiene la canalización que produce los resultados del Capítulo 5. Implementa el protocolo del PTFG rev6 (Metodología de la Investigación).
+Este repositorio contiene la canalización que produce los resultados del Capítulo 5 de la memoria (MTFG) y permite regenerarlos (Anexo D). Implementa el protocolo aprobado en el Proyecto de Trabajo Final de Grado (PTFG rev6, Metodología de la Investigación).
 
 ---
 
@@ -54,7 +54,7 @@ python src/sensibilidad.py --area jersey_city
 
 `--prueba` corre una muestra reducida (5 pares, 1 réplica) para comprobar que todo funciona. Sus salidas llevan el sufijo `_prueba`.
 
-Tiempos en el equipo de medición: Encarnación tarda alrededor de 1,5 min; Jersey City, alrededor de 2 h, casi todo en las 30 réplicas de M1.
+Tiempos en el equipo de medición: Encarnación tarda alrededor de 1,5 min; Jersey City, alrededor de 3 h, casi todo en las 30 réplicas de M1. La corrida de Jersey City guarda cada réplica al terminar y, si se interrumpe, se retoma salteando las ya hechas.
 
 ---
 
@@ -63,7 +63,7 @@ Tiempos en el equipo de medición: Encarnación tarda alrededor de 1,5 min; Jers
 | Carpeta | Contenido |
 | --- | --- |
 | `datos/crudos/` | Fuentes tal como se descargaron. No se editan nunca |
-| `datos/derivados/` | Grafos y caché de OpenStreetMap (descarga del 03/09/2026) |
+| `datos/derivados/cache_osm/` | Copia de la red de OpenStreetMap descargada el 03/09/2026. Debe usarse esta copia: una descarga nueva puede diferir |
 | `src/` | Módulos de la canalización |
 | `resultados/tablas/` | Mediciones, resúmenes, pruebas estadísticas y verificación |
 | `resultados/figuras/` | Gráficos, en PNG a 300 ppp y PDF |
@@ -112,6 +112,7 @@ Tiempos en el equipo de medición: Encarnación tarda alrededor de 1,5 min; Jers
 - Es el relevamiento ciudadano de J. Schmalko con estudiantes de Ingeniería de la UNI, de marzo de 2025.
 - Cubre 2,89 km² del microcentro, delimitados por las avenidas Irrazábal, Caballero, Francia y Costanera República del Paraguay con calle Iturbe.
 - Tiene 359 marcas, cada una con identificador, coordenadas, de 1 a 4 fotos y color. No incluye dimensiones ni severidad.
+- **Versión publicada:** el archivo de este repositorio no incluye las descripciones de las marcas, que contenían los enlaces a las fotos alojadas por los autores del relevamiento. Conserva el identificador, las coordenadas y el estilo (color) de cada marca, que es todo lo que usa el código; los 359 registros leídos son idénticos a los del archivo original.
 
 **Jersey City**: `datos/crudos/jersey_city_potholes.csv`.
 - Es el conjunto «Pothole Map 2019» del Departamento de Obras Públicas, publicado en el portal oficial con licencia ODC-BY.
@@ -123,3 +124,17 @@ Tiempos en el equipo de medición: Encarnación tarda alrededor de 1,5 min; Jers
 ## Equipo de medición
 
 PK-PC: Intel Core i5-14600K (14 núcleos físicos / 20 lógicos), 31,7 GB a 4800 MT/s, Windows 11 build 26200, Python 3.14.5. `entorno.py` lo registra en cada `estructura_<area>.json`. Las mediciones definitivas se toman sin otros procesos de carga significativa.
+
+**Red vial**: `datos/derivados/cache_osm/`, respuestas de OpenStreetMap guardadas por OSMnx. © colaboradores de OpenStreetMap, disponible bajo la Open Database License (ODbL), https://www.openstreetmap.org/copyright.
+
+## Verificación en un segundo equipo
+
+La corrida completa se repitió en un segundo equipo (Intel Core i5-13600KF, 31,8 GB, Windows 11, Python 3.14.8), sin acceso a los resultados del equipo de medición. `src/comparar_reproduccion.py` comparó las 96.000 filas de mediciones: coincidieron en todas las magnitudes que no dependen del equipo (pares, rutas, longitudes, exposición, costos, contadores y verificación). Los tiempos dependen del equipo y no se comparan.
+
+```bash
+python src/comparar_reproduccion.py --referencia <carpeta con las tablas de referencia> --area encarnacion
+```
+
+## Licencia
+
+El código se publica bajo la licencia MIT (archivo `LICENSE`). Los datos conservan sus propias licencias: la red vial, la ODbL de OpenStreetMap; el conjunto de Jersey City, la ODC-BY de su portal de datos abiertos; y el relevamiento de Encarnación pertenece a sus autores, que se citan en la memoria.
