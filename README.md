@@ -68,7 +68,6 @@ Tiempos en el equipo de medición: Encarnación tarda alrededor de 1,5 min; Jers
 | `resultados/tablas/` | Mediciones, resúmenes, pruebas estadísticas y verificación |
 | `resultados/figuras/` | Gráficos, en PNG a 300 ppp y PDF |
 | `resultados/mapas/` | Mapas de red, severidad, rutas y sentidos |
-| `resultados/_diseño_anterior/` | Resultados del diseño previo (C2/C3). No se usan en la memoria |
 
 | Módulo | Responsabilidad |
 | --- | --- |
