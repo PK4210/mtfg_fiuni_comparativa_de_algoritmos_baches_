@@ -44,6 +44,11 @@ WARM = "#9c4a21"
 VERDE = "#4f8a5b"
 
 
+def _miles(n: int) -> str:
+    """Separador de miles con punto, como en la memoria."""
+    return f"{n:,}".replace(",", ".")
+
+
 def _guardar(fig, nombre: str) -> None:
     dpi = CFG["visualizacion"]["dpi_mapas"]
     for ext in ("png", "pdf"):
@@ -90,11 +95,11 @@ def mapa_red(G, aristas, nodos, puntos, clases, ciudad: str, titulo: str,
     ax.legend(handles=[
         Line2D([], [], color=GRIS, lw=1.4, label="tramo vial"),
         Line2D([], [], marker="o", ls="", color="#7d878e", ms=3,
-               label=f"intersección ({G.number_of_nodes()})"),
+               label=f"intersección ({_miles(G.number_of_nodes())})"),
         Line2D([], [], marker="o", ls="", color=WARM, ms=4,
-               label=f"bache individual ({sum(1 for g in grandes if not g)})"),
+               label=f"bache individual ({_miles(sum(1 for g in grandes if not g))})"),
         Line2D([], [], marker="o", ls="", color=WARM, ms=8,
-               label=f"agrupación ({sum(grandes)})"),
+               label=f"agrupación ({_miles(sum(grandes))})"),
     ], loc="upper left", bbox_to_anchor=(-.02, -.01), frameon=False, fontsize=8)
     if nota:
         fig.text(.5, .012, nota, ha="center", fontsize=7.5, color="#8a4a20", style="italic")
@@ -102,7 +107,7 @@ def mapa_red(G, aristas, nodos, puntos, clases, ciudad: str, titulo: str,
 
 
 def mapa_severidad(G, aristas, ciudad: str, titulo: str) -> None:
-    """Aristas coloreadas por el índice de deterioro que penaliza el costo."""
+    """Aristas coloreadas por el índice de severidad s(e) que penaliza el costo."""
     sev = np.array([G.edges[i].get("severidad", 0.0) for i in aristas.index])
     fig, ax = _lienzo()
     aristas[sev == 0].plot(ax=ax, color=GRIS, linewidth=0.6, zorder=1)
@@ -117,9 +122,9 @@ def mapa_severidad(G, aristas, ciudad: str, titulo: str) -> None:
         barra.set_label("índice de severidad  s(e)", fontsize=9)
         barra.outline.set_visible(False)
 
-    pct = round(100 * len(con) / len(aristas), 1)
-    ax.set_title(f"Deterioro por tramo — {titulo}\n"
-                 f"{len(con)} de {len(aristas)} tramos con baches ({pct} %)",
+    pct = f"{100 * len(con) / len(aristas):.1f}".replace(".", ",")
+    ax.set_title(f"Severidad por tramo — {titulo}\n"
+                 f"{_miles(len(con))} de {_miles(len(aristas))} tramos con baches ({pct} %)",
                  fontsize=11, pad=8)
     _guardar(fig, f"severidad_{ciudad}")
 
@@ -162,7 +167,7 @@ def mapa_sentidos(G, aristas, ciudad: str, titulo: str) -> None:
 
     n_doble, n_unico = int(doble.sum()), int((~doble).sum())
     ax.set_title(f"Sentido de circulación según OpenStreetMap — {titulo}\n"
-                 f"{n_unico} tramos de sentido único, {n_doble} de doble",
+                 f"{_miles(n_unico)} tramos de sentido único, {_miles(n_doble)} de doble",
                  fontsize=11, pad=8)
     ax.legend(handles=[
         Line2D([], [], color=ACC, lw=1.8, label="sentido único"),
@@ -210,7 +215,7 @@ def mapa_rutas(G, aristas, ciudad: str, titulo: str) -> dict:
                     lw=ancho, solid_capstyle="round", alpha=.95, zorder=3)
         m = de_ruta(G, rutas["dijkstra"])
         leyenda.append(Line2D([], [], color=color, lw=min(ancho, 4),
-                              label=f"α = {alfa:g}: {m['longitud_m']:.0f} m, {m['exposicion']:.0f} baches"))
+                              label=f"α = {alfa:g}: {_miles(round(m['longitud_m']))} m, {_miles(round(m['exposicion']))} baches"))
     for n, txt in ((origen, "O"), (destino, "D")):
         ax.plot(G.nodes[n]["x"], G.nodes[n]["y"], "o", color="black", ms=6, zorder=5)
         ax.annotate(txt, (G.nodes[n]["x"], G.nodes[n]["y"]), xytext=(5, 5),
@@ -220,8 +225,7 @@ def mapa_rutas(G, aristas, ciudad: str, titulo: str) -> dict:
         nota = "Para cada α, Dijkstra, A* y Bellman-Ford obtuvieron la misma ruta."
     else:
         nota = "Para algún α los algoritmos obtuvieron rutas distintas de igual costo: " + str(iguales)
-    ax.set_title(f"Rutas calculadas sobre un mismo par — {titulo}
-{nota}", fontsize=10, pad=8)
+    ax.set_title(f"Rutas calculadas sobre un mismo par — {titulo}\n{nota}", fontsize=10, pad=8)
     _guardar(fig, f"rutas_{ciudad}")
     return {"origen": origen, "destino": destino, "rutas_identicas_por_alfa": iguales}
 
