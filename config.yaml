@@ -1,24 +1,28 @@
 # Configuración del experimento — MTFG
-# Evaluación comparativa de Dijkstra, A* y Bellman-Ford según la severidad de
-# baches. Protocolo del PTFG rev6 (Metodología de la Investigación).
+# Evaluación comparativa de Dijkstra, A* y Bellman-Ford según la
+# severidad de baches. Protocolo del PTFG rev6 (Metodología de la
+# Investigación).
 #
-# Todos los parámetros del experimento viven acá. El código no contiene
-# ninguna constante: cambiar un valor de este archivo cambia el experimento.
+# Todos los parámetros del experimento viven acá. El código no
+# contiene ninguna constante: cambiar un valor de este archivo
+# cambia el experimento. Las líneas no pasan de 68 caracteres para
+# que el archivo se lea completo en el Anexo A de la memoria.
 
-semilla_maestra: 20260903      # de ella se derivan todas las demás semillas
+semilla_maestra: 20260903   # de ella se derivan las demás semillas
 
-# --- Áreas de estudio -------------------------------------------------------
+# --- Áreas de estudio -----------------------------------------
 areas:
   encarnacion:
     nombre: "Encarnación, Paraguay"
     rol: "caso de estudio principal"
-    # Recuadro del relevamiento: Av. Irrazábal, Av. Caballero, Av. Francia y
-    # Av. Costanera Rep. del Paraguay con calle Iturbe (2,89 km²).
-    bbox: [-55.8733, -27.3440, -55.8581, -27.3258]   # oeste, sur, este, norte
+    # Recuadro del relevamiento: Av. Irrazábal, Av. Caballero,
+    # Av. Francia y Av. Costanera Rep. del Paraguay con calle Iturbe
+    # (2,89 km²). Orden: oeste, sur, este, norte.
+    bbox: [-55.8733, -27.3440, -55.8581, -27.3258]
     epsg_metrico: 32721         # UTM zona 21 sur
     fuente_baches: "datos/crudos/Capa Baches.kml"
     formato: kml
-    modelos: [observado]        # la clase la asignaron los autores (color)
+    modelos: [observado]        # clase asignada por los autores
 
   jersey_city:
     nombre: "Jersey City, Nueva Jersey, EE. UU."
@@ -27,37 +31,40 @@ areas:
     epsg_metrico: 32618         # UTM zona 18 norte
     fuente_baches: "datos/crudos/jersey_city_potholes.csv"
     formato: csv
-    modelos: [M1, M2]           # registros sueltos: la clase se asigna
+    modelos: [M1, M2]           # registros sueltos: clase asignada
 
-# --- Clases y severidad (PTFG rev6, párrafos 1 y 2 del protocolo) -----------
-# Severidad = concentración de baches por tramo. Cada registro es un bache
-# individual o una agrupación de baches próximos registrada como un punto.
+# --- Clases y severidad (PTFG rev6, párrafos 1 y 2) -----------
+# Severidad = concentración de baches por tramo. Cada registro es un
+# bache individual o una agrupación de baches próximos registrada
+# como un punto.
 clases:
-  # El relevamiento de Encarnación codifica la clase en el color del ícono.
+  # El relevamiento de Encarnación codifica la clase en el color
+  # del ícono.
   correspondencia_color:
     "0F9D58": individual        # verde
     "0288D1": agrupacion        # azul
+  # b ≈ (750 − 322) / 37 ≈ 11,6; el mismo valor en ambas ciudades
   baches_representados:
     individual: 1
-    agrupacion: 12              # b ≈ (750 − 322) / 37 ≈ 11,6, mismo valor en ambas ciudades
+    agrupacion: 12
 
-# Modelos de asignación de clase, aplicados únicamente a Jersey City.
+# Modelos de asignación de clase, aplicados solo a Jersey City.
 modelos:
   M1:
     descripcion: "proporción igualada"
-    proporcion_agrupacion: 0.10306406685   # 37 / 359, la de Encarnación
+    proporcion_agrupacion: 0.10306406685   # 37 / 359
     replicas: 30                # sorteos con semillas distintas
   M2:
     descripcion: "agrupación por radio"
-    radio_m: 10                 # registros a ≤ 10 m entre sí forman un grupo
+    radio_m: 10                 # a ≤ 10 m entre sí forman un grupo
 
-# --- Construcción del grafo -------------------------------------------------
+# --- Construcción del grafo -----------------------------------
 grafo:
   tipo_red: drive               # red de circulación vehicular
   simplificar: true
-  velocidad_por_defecto: 30     # km/h, si no hay señalización ni jerarquía
+  velocidad_por_defecto: 30     # km/h, sin señal ni jerarquía
 
-# --- Asignación espacial y función de costo (párrafo 3) ---------------------
+# --- Asignación espacial y función de costo (párrafo 3) -------
 asignacion:
   radio_tolerancia_m: 20        # distancia máxima registro -> tramo
 
@@ -65,34 +72,36 @@ costo:
   percentil_tope: 95            # s(e) = mín(1, d(e) / d95)
   alfas: [0.0, 0.5, 1.0, 2.0, 5.0]   # w(e) = ℓ(e) · [1 + α · s(e)]
 
-# --- Protocolo experimental (párrafos 4 a 6) --------------------------------
+# --- Protocolo experimental (párrafos 4 a 6) ------------------
 experimento:
   pares_od: 200                 # pares origen-destino por ciudad
-  distancia_minima_m: 300       # en línea recta, coordenadas proyectadas
+  distancia_minima_m: 300       # en línea recta, en metros UTM
   repeticiones: 5               # cronometrajes por consulta
-  descartar_calentamiento: 1    # se descarta la primera; se informa la mediana
-  tolerancia_relativa: 1.0e-9   # coincidencia de costos entre algoritmos y NetworkX
-  significacion: 0.05           # Friedman, Wilcoxon con corrección de Holm
+  descartar_calentamiento: 1    # la primera; se informa la mediana
+  tolerancia_relativa: 1.0e-9   # costos: algoritmos y NetworkX
+  significacion: 0.05           # Friedman y Wilcoxon con Holm
 
-# --- Análisis complementario de sensibilidad --------------------------------
+# --- Análisis complementario de sensibilidad ------------------
 sensibilidad:
   baches_agrupacion: [1, 6, 12, 24]   # Encarnación y Jersey City M2
   radios_m: [5, 10, 15]               # Jersey City M2
 
-# --- Visualización ----------------------------------------------------------
+# --- Visualización --------------------------------------------
 visualizacion:
   fps: 30
   cuadros_objetivo: 600         # se decima la traza para no pasarse
-  segundos_ruta_final: 2        # cuánto se sostiene la ruta al terminar
+  segundos_ruta_final: 2        # cuánto se sostiene la ruta final
   dpi_mapas: 300
   dpi_figuras: 300
-  # el par origen-destino de los mapas de rutas y de los videos se elige del
-  # cuartil superior de distancia, para que el recorrido sea largo
+  # el par origen-destino de los mapas de rutas y de los videos se
+  # elige del cuartil superior de distancia, para que el recorrido
+  # sea largo
   cuantil_distancia_par: 0.75
 
-# --- Correcciones de sentido de circulación ---------------------------------
-# Si `datos/crudos/sentidos_corregidos.csv` existe y tiene filas, sus valores
-# sobrescriben lo que dice OpenStreetMap. Sirve para arreglar sentidos mal
-# cartografiados sin tocar el código ni editar OSM.
+# --- Correcciones de sentido de circulación -------------------
+# Si `datos/crudos/sentidos_corregidos.csv` existe y tiene filas,
+# sus valores sobrescriben lo que dice OpenStreetMap. Sirve para
+# arreglar sentidos mal cartografiados sin tocar el código ni
+# editar OSM.
 sentidos:
   archivo_correcciones: "datos/crudos/sentidos_corregidos.csv"

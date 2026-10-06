@@ -225,7 +225,8 @@ def ponderar(G: nx.MultiDiGraph, alfa: float) -> nx.MultiDiGraph:
     admisible la heurística euclidiana de A*.
     """
     for _, _, datos in G.edges(data=True):
-        datos["peso"] = datos["length"] * (1.0 + alfa * datos.get("severidad", 0.0))
+        s = datos.get("severidad", 0.0)
+        datos["peso"] = datos["length"] * (1.0 + alfa * s)
         datos["exposicion"] = datos.get("baches", 0.0)
     G.graph["alfa"] = alfa
     return G
