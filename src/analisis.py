@@ -215,6 +215,14 @@ def _guardar(fig, nombre: str) -> None:
     print(f"   -> {nombre}.png")
 
 
+def _etiqueta_panel(ax, ejes) -> None:
+    """Sin títulos dentro de la figura (van en la leyenda de la memoria); con más de un
+    panel, cada uno se identifica con (a), (b)… como en la plantilla de la MTFG."""
+    if len(ejes) > 1:
+        letra = "abcdefgh"[list(ejes).index(ax)]
+        ax.set_title(f"({letra})", fontsize=9, loc="left")
+
+
 def _paneles(modelos: list[str]):
     fig, ejes = plt.subplots(1, len(modelos), figsize=(15.5 * CM, 6.2 * CM), sharey=True,
                              squeeze=False)
@@ -237,7 +245,7 @@ def figura_tiempos(res: pd.DataFrame, area: str) -> None:
         ax.set_yscale("log")
         _formato_es(ax, log=True)
         ax.set_xlabel("α")
-        ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
+        _etiqueta_panel(ax, ejes)
         ax.grid(alpha=.3, which="both", lw=.4)
     ejes[0].set_ylabel("tiempo de cómputo [ms]")
     ejes[0].legend(frameon=False, fontsize=8)
@@ -266,7 +274,7 @@ def figura_esfuerzo(res: pd.DataFrame, area: str) -> None:
         else:
             ax2.set_yticklabels([])
         ax.set_xlabel("α")
-        ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
+        _etiqueta_panel(ax, ejes)
         ax.grid(alpha=.3, lw=.4)
     ejes[0].set_ylabel("nodos expandidos (mediana)")
     h1, l1 = ejes[0].get_legend_handles_labels()
@@ -295,7 +303,7 @@ def figura_compromiso(res: pd.DataFrame, area: str) -> None:
         ax.margins(x=.2, y=.1)
         _formato_es(ax)
         ax.set_xlabel("desvío de longitud respecto de α = 0 [%]")
-        ax.set_title(NOMBRE_MODELO[modelo], fontsize=9)
+        _etiqueta_panel(ax, ejes)
         ax.grid(alpha=.3, lw=.4)
     ejes[0].set_ylabel("exposición media [baches por ruta]")
     _guardar(fig, f"compromiso_{area}")
@@ -324,6 +332,7 @@ def figura_replicas(df: pd.DataFrame, area: str) -> None:
     for ax in (ax1, ax2):
         ax.grid(alpha=.3, lw=.4)
         _formato_es(ax, x=False)
+        _etiqueta_panel(ax, (ax1, ax2))
     _guardar(fig, f"replicas_m1_{area}")
 
 

@@ -92,7 +92,6 @@ def mapa_red(G, aristas, nodos, puntos, clases, ciudad: str, titulo: str,
         gra.plot(ax=ax, color=WARM, markersize=max(8, 52 * esc), alpha=.75,
                  edgecolor="white", linewidth=.4 * esc, zorder=4)
 
-    ax.set_title(f"Red vial y baches relevados — {titulo}", fontsize=11, pad=8)
     ax.legend(handles=[
         Line2D([], [], color=GRIS, lw=1.4, label="tramo vial"),
         Line2D([], [], marker="o", ls="", color="#7d878e", ms=3,
@@ -125,9 +124,8 @@ def mapa_severidad(G, aristas, ciudad: str, titulo: str) -> None:
         barra.ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.1f}".replace(".", ",")))
 
     pct = f"{100 * len(con) / len(aristas):.1f}".replace(".", ",")
-    ax.set_title(f"Severidad por tramo — {titulo}\n"
-                 f"{_miles(len(con))} de {_miles(len(aristas))} tramos con baches ({pct} %)",
-                 fontsize=11, pad=8)
+    # sin título en la imagen: la leyenda de la figura va en la memoria
+    print(f"   {titulo}: {_miles(len(con))} de {_miles(len(aristas))} tramos con baches ({pct} %)")
     _guardar(fig, f"severidad_{ciudad}")
 
 
@@ -168,9 +166,7 @@ def mapa_sentidos(G, aristas, ciudad: str, titulo: str) -> None:
                           alpha=.72))
 
     n_doble, n_unico = int(doble.sum()), int((~doble).sum())
-    ax.set_title(f"Sentido de circulación según OpenStreetMap — {titulo}\n"
-                 f"{_miles(n_unico)} tramos de sentido único, {_miles(n_doble)} de doble",
-                 fontsize=11, pad=8)
+    print(f"   {titulo}: {_miles(n_unico)} tramos de sentido único, {_miles(n_doble)} de doble")
     ax.legend(handles=[
         Line2D([], [], color=ACC, lw=1.8, label="sentido único"),
         Line2D([], [], color=VERDE, lw=1.8, label="doble sentido"),
@@ -223,11 +219,6 @@ def mapa_rutas(G, aristas, ciudad: str, titulo: str) -> dict:
         ax.annotate(txt, (G.nodes[n]["x"], G.nodes[n]["y"]), xytext=(5, 5),
                     textcoords="offset points", fontsize=9, weight="bold", zorder=6)
     ax.legend(handles=leyenda, loc="upper left", bbox_to_anchor=(-.02, -.01), frameon=False, fontsize=8)
-    if all(iguales.values()):
-        nota = "Para cada α, Dijkstra, A* y Bellman-Ford obtuvieron la misma ruta."
-    else:
-        nota = "Para algún α los algoritmos obtuvieron rutas distintas de igual costo: " + str(iguales)
-    ax.set_title(f"Rutas calculadas sobre un mismo par — {titulo}\n{nota}", fontsize=10, pad=8)
     _guardar(fig, f"rutas_{ciudad}")
     return {"origen": origen, "destino": destino, "rutas_identicas_por_alfa": iguales}
 
