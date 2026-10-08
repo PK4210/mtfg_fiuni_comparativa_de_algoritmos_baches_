@@ -279,7 +279,9 @@ def figura_esfuerzo(res: pd.DataFrame, area: str) -> None:
     ejes[0].set_ylabel("nodos expandidos (mediana)")
     h1, l1 = ejes[0].get_legend_handles_labels()
     h2, l2 = ax2.get_legend_handles_labels()
-    ejes[0].legend(h1 + h2, l1 + l2, frameon=False, fontsize=7.5, loc="upper left")
+    # la leyenda va debajo del gráfico: dentro tapaba la curva de Dijkstra, que queda arriba
+    fig.legend(h1 + h2, l1 + l2, frameon=False, fontsize=7.5, ncol=3,
+               loc="upper center", bbox_to_anchor=(0.5, -0.05))
     _guardar(fig, f"esfuerzo_{area}")
 
 
